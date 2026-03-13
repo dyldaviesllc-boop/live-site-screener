@@ -4,30 +4,31 @@ import { MapContainer, TileLayer, CircleMarker, Popup, LayersControl, useMap } f
 const BATCH_SIZE = 10;
 
 const DEFAULT_CRITERIA = {
-  cc_rate_min:       { op: ">=", value: 1.00,    enabled: true,  label: "Climate Controlled Rate",     unit: "$/SF/mo",  step: 0.05 },
+  cc_rate_min:       { op: ">=", value: 2.00,    enabled: true,  label: "Climate Controlled Rate",     unit: "$/SF/mo",  step: 0.05 },
   cc_rate_max:       { op: "<",  value: 4.00,    enabled: false, label: "CC Rate Ceiling",             unit: "$/SF/mo",  step: 0.05 },
-  noncc_rate_min:    { op: ">=", value: 0.75,    enabled: true,  label: "Non-Climate Rate",            unit: "$/SF/mo",  step: 0.05 },
+  noncc_rate_min:    { op: ">=", value: 0.75,    enabled: false, label: "Non-Climate Rate",            unit: "$/SF/mo",  step: 0.05 },
   noncc_rate_max:    { op: "<",  value: 3.00,    enabled: false, label: "Non-Climate Rate Ceiling",    unit: "$/SF/mo",  step: 0.05 },
-  occupancy_min:     { op: ">",  value: 88,      enabled: true,  label: "Market Occupancy",            unit: "%",        step: 1 },
-  sf_per_capita_max: { op: "<",  value: 8.0,     enabled: true,  label: "SF Per Capita (Supply)",      unit: "SF",       step: 0.5 },
-  pop_3mi_min:       { op: ">",  value: 50000,   enabled: true,  label: "Population (trade area)",     unit: "",         step: 5000 },
-  hhi_min:           { op: ">",  value: 75000,   enabled: true,  label: "Average HH Income (trade area)", unit: "$",     step: 5000 },
+  occupancy_min:     { op: ">",  value: 80,      enabled: false, label: "Market Occupancy",            unit: "%",        step: 1 },
+  sf_per_capita_max: { op: "<=", value: 9.5,     enabled: true,  label: "SF Per Capita (Supply)",      unit: "SF",       step: 0.5 },
+  pop_3mi_min:       { op: ">=", value: 50000,   enabled: true,  label: "Population (trade area)",     unit: "",         step: 5000 },
+  hhi_min:           { op: ">=", value: 75000,   enabled: true,  label: "Average HH Income (trade area)", unit: "$",     step: 5000 },
   min_acreage_ss:    { op: ">=", value: 1.5,     enabled: true,  label: "Min Acreage (Self-Storage)",  unit: "ac",       step: 0.25 },
   max_price_per_acre:{ op: "<",  value: 1500000, enabled: false, label: "Max Price Per Acre",          unit: "$",        step: 50000 },
 };
 
 // ── Theme ────────────────────────────────────────────────────────────────────
-
+// Structural colors use CSS custom properties so dark mode works everywhere.
+// Accent colors stay as raw hex since they're consistent across themes.
 const C = {
-  bg: "#f8fafc", sf: "#f1f5f9", card: "#ffffff", brd: "#e2e8f0", brdL: "#cbd5e1",
-  tx: "#0f172a", txM: "#475569", txD: "#94a3b8",
+  bg: "var(--bg)", sf: "var(--sf)", card: "var(--card)", brd: "var(--brd)", brdL: "var(--brdL)",
+  tx: "var(--tx)", txM: "var(--txM)", txD: "var(--txD)",
   blue: "#60a5fa", grn: "#34d399", yel: "#fbbf24", org: "#fb923c",
   red: "#f87171", pur: "#a78bfa", cyn: "#22d3ee", pnk: "#f472b6",
 };
 const G = {
-  glass: "rgba(255,255,255,0.62)", glassBrd: "rgba(255,255,255,0.45)",
-  blur: "blur(44px) saturate(180%)", blurSm: "blur(24px) saturate(160%)",
-  shadow: "0 8px 32px rgba(0,0,0,0.08), 0 0 0 1px rgba(255,255,255,0.4) inset", shadowSm: "0 4px 16px rgba(0,0,0,0.05), 0 0 0 1px rgba(255,255,255,0.35) inset",
+  glass: "var(--glass)", glassBrd: "var(--glassBrd)",
+  blur: "var(--blur)", blurSm: "var(--blurSm)",
+  shadow: "var(--shadow)", shadowSm: "var(--shadowSm)",
 };
 const sCol = s => s >= 8 ? C.grn : s >= 6 ? C.yel : s >= 4 ? C.org : C.red;
 
@@ -45,12 +46,12 @@ const TYPE_COLORS = {
   "Retail/Big Box": { bg: `${C.pnk}0a`, c: C.pnk },
   "Highway Frontage": { bg: `${C.blue}0a`, c: C.blue },
   Commercial: { bg: `${C.pur}0a`, c: C.pur },
-  _def: { bg: `${C.txD}0a`, c: C.txD },
+  _def: { bg: "rgba(148,163,184,0.04)", c: C.txD },
 };
 const CAT_COLORS = {
   conversion: { bg: `${C.org}0a`, c: C.org },
   land: { bg: `${C.grn}0a`, c: C.grn },
-  _def: { bg: `${C.txD}0a`, c: C.txD },
+  _def: { bg: "rgba(148,163,184,0.04)", c: C.txD },
 };
 
 // ── Tiny UI components ───────────────────────────────────────────────────────
@@ -97,7 +98,7 @@ const BrokerVerifyLinks = ({ address, broker }) => {
 const Btn = ({ onClick, disabled, primary, children, style: sx }) => (
   <button onClick={onClick} disabled={disabled} className={primary && !disabled ? "brut-btn" : ""}
     style={{ padding: "9px 22px", borderRadius: 10, border: primary ? "none" : `1px solid ${G.glassBrd}`, fontFamily: "inherit",
-      background: primary ? (disabled ? C.brd : "linear-gradient(135deg,#1e3a5f,#2d4a7c)") : "rgba(255,255,255,0.5)",
+      background: primary ? (disabled ? C.brd : "linear-gradient(135deg,#1e3a5f,#2d4a7c)") : G.glass,
       backdropFilter: primary ? "none" : G.blurSm, WebkitBackdropFilter: primary ? "none" : G.blurSm,
       color: primary ? (disabled ? C.txD : "#fff") : C.tx, fontSize: 12.5, fontWeight: 600, cursor: disabled ? "default" : "pointer", letterSpacing: "-0.01em",
       boxShadow: primary && !disabled ? "3px 3px 0 rgba(0,0,0,0.15), 0 2px 8px rgba(30,58,95,0.2)" : G.shadowSm, ...sx }} >
@@ -129,7 +130,7 @@ const StatBox = ({ l, v, c }) => (
 const Modal = ({ onClose, width, children }) => (
   <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.25)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", animation: "modalBgIn 0.2s ease" }}
     onClick={onClose}>
-    <div style={{ background: "rgba(255,255,255,0.75)", backdropFilter: "blur(40px) saturate(180%)", WebkitBackdropFilter: "blur(40px) saturate(180%)", border: `1px solid ${G.glassBrd}`, borderRadius: 20, padding: 28, width: width || 480, maxHeight: "80vh", overflow: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.12), 0 0 0 1px rgba(255,255,255,0.4) inset", animation: "modalIn 0.3s cubic-bezier(0.16,1,0.3,1)" }}
+    <div style={{ background: "var(--modalBg)", backdropFilter: "blur(40px) saturate(180%)", WebkitBackdropFilter: "blur(40px) saturate(180%)", border: `1px solid ${G.glassBrd}`, borderRadius: 20, padding: 28, width: width || 480, maxHeight: "80vh", overflow: "auto", boxShadow: "var(--modalSh)", animation: "modalIn 0.3s cubic-bezier(0.16,1,0.3,1)" }}
       onClick={e => e.stopPropagation()}>
       {children}
     </div>
@@ -222,7 +223,12 @@ function parseSiteLine(line) {
 
 export default function App() {
   const [tab, setTab] = useState("input");
-  const [lightMode, setLightMode] = useState(true);
+  const [lightMode, setLightMode] = useState(() => {
+    try { const v = localStorage.getItem("ss-theme"); return v === "dark" ? false : true; } catch { return true; }
+  });
+  const toggleTheme = useCallback(() => {
+    setLightMode(p => { const next = !p; try { localStorage.setItem("ss-theme", next ? "light" : "dark"); } catch {} return next; });
+  }, []);
   const [addrs, setAddrs] = useState("");
   const [criteria, setCriteria] = useState(DEFAULT_CRITERIA);
   const [results, setResults] = useState([]);
@@ -874,12 +880,12 @@ export default function App() {
         <input type="checkbox" checked={c.enabled} onChange={e => upd(k, "enabled", e.target.checked)} style={{ accentColor: accent, cursor: "pointer" }} />
         <div style={{ flex: 1, fontSize: 12, fontWeight: 500, color: c.enabled ? C.tx : C.txD }}>{c.label}</div>
         <select value={c.op} disabled={!c.enabled} onChange={e => upd(k, "op", e.target.value)}
-          style={{ width: 50, padding: "4px 2px", borderRadius: 6, fontSize: 13, fontWeight: 700, background: lightMode ? "#f1f5f9" : "#1e293b", color: c.enabled ? C.yel : C.txD, border: "none", textAlign: "center", fontFamily: "'JetBrains Mono', monospace", WebkitAppearance: "none", MozAppearance: "none", appearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath fill='%2394a3b8' d='M0 0l4 5 4-5z'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 4px center", paddingRight: 14, cursor: "pointer" }}>
+          style={{ width: 50, padding: "4px 2px", borderRadius: 6, fontSize: 13, fontWeight: 700, background: "var(--inputBg)", color: c.enabled ? C.yel : C.txD, border: "none", textAlign: "center", fontFamily: "'JetBrains Mono', monospace", WebkitAppearance: "none", MozAppearance: "none", appearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath fill='%2394a3b8' d='M0 0l4 5 4-5z'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 4px center", paddingRight: 14, cursor: "pointer" }}>
           <option value=">">{">"}</option><option value="<">{"<"}</option><option value=">=">{">="}</option><option value="<=">{"<="}</option>
         </select>
         <input type="number" value={c.value} disabled={!c.enabled} step={c.step}
           onChange={e => upd(k, "value", parseFloat(e.target.value) || 0)}
-          style={{ width: 95, padding: "5px 8px", borderRadius: 8, fontSize: 13, background: lightMode ? "#f1f5f9" : "#1e293b", color: c.enabled ? C.tx : C.txD, border: "none", fontFamily: "inherit", textAlign: "right" }} />
+          style={{ width: 95, padding: "5px 8px", borderRadius: 8, fontSize: 13, background: "var(--inputBg)", color: c.enabled ? C.tx : C.txD, border: "none", fontFamily: "inherit", textAlign: "right" }} />
         <span style={{ fontSize: 10, color: C.txD, minWidth: 54 }}>{c.unit}</span>
       </div>
     );
@@ -979,13 +985,52 @@ export default function App() {
   }, [lightMode]);
 
   return (
-    <div style={{ minHeight: "100vh", background: "transparent", color: lightMode ? C.tx : "#f1f5f9", fontFamily: "'Inter', 'DM Sans', system-ui, -apple-system, sans-serif", position: "relative", zIndex: 1 }}>
+    <div style={{ minHeight: "100vh", background: "transparent", color: C.tx, fontFamily: "'Inter', 'DM Sans', system-ui, -apple-system, sans-serif", position: "relative", zIndex: 1 }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        :root {
+          ${lightMode ? `
+          --bg: #f8fafc; --sf: #f1f5f9; --card: #ffffff; --brd: #e2e8f0; --brdL: #cbd5e1;
+          --tx: #0f172a; --txM: #475569; --txD: #94a3b8;
+          --glass: rgba(255,255,255,0.62); --glassBrd: rgba(255,255,255,0.45);
+          --blur: blur(44px) saturate(180%); --blurSm: blur(24px) saturate(160%);
+          --shadow: 0 8px 32px rgba(0,0,0,0.08), 0 0 0 1px rgba(255,255,255,0.4) inset;
+          --shadowSm: 0 4px 16px rgba(0,0,0,0.05), 0 0 0 1px rgba(255,255,255,0.35) inset;
+          --hdrBg: rgba(255,255,255,0.55); --hdrBrd: rgba(255,255,255,0.6); --hdrSh: 0 4px 24px rgba(0,0,0,0.04);
+          --tabBg: rgba(255,255,255,0.45); --tabAct: rgba(255,255,255,0.92);
+          --inputBg: #f1f5f9; --textaBg: rgba(255,255,255,0.65);
+          --rowBg: rgba(255,255,255,0.4); --rowBgAlt: rgba(255,255,255,0.3);
+          --rowHov: rgba(30,64,175,0.03); --rowSticky: rgba(255,255,255,0.5);
+          --footBg: rgba(255,255,255,0.35); --filterPill: rgba(255,255,255,0.3);
+          --filterPillAct: rgba(255,255,255,0.8); --dimBg: rgba(255,255,255,0.65); --dimBrd: rgba(255,255,255,0.5);
+          --modalBg: rgba(255,255,255,0.75); --modalSh: 0 24px 80px rgba(0,0,0,0.12), 0 0 0 1px rgba(255,255,255,0.4) inset;
+          --popupBg: rgba(255,255,255,0.78); --popupBrd: rgba(255,255,255,0.4);
+          --ctrlBg: rgba(255,255,255,0.65); --ctrlBrd: rgba(255,255,255,0.35);
+          --bodyBg: #dde5f2;
+          ` : `
+          --bg: #0f172a; --sf: #1e293b; --card: #1e293b; --brd: #334155; --brdL: #475569;
+          --tx: #f1f5f9; --txM: #94a3b8; --txD: #64748b;
+          --glass: rgba(30,41,59,0.72); --glassBrd: rgba(255,255,255,0.08);
+          --blur: blur(44px) saturate(180%); --blurSm: blur(24px) saturate(160%);
+          --shadow: 0 8px 32px rgba(0,0,0,0.25), 0 0 0 1px rgba(255,255,255,0.05) inset;
+          --shadowSm: 0 4px 16px rgba(0,0,0,0.2), 0 0 0 1px rgba(255,255,255,0.04) inset;
+          --hdrBg: rgba(15,23,42,0.65); --hdrBrd: rgba(255,255,255,0.08); --hdrSh: 0 4px 24px rgba(0,0,0,0.2);
+          --tabBg: rgba(255,255,255,0.06); --tabAct: rgba(255,255,255,0.14);
+          --inputBg: #1e293b; --textaBg: rgba(30,41,59,0.6);
+          --rowBg: rgba(15,23,42,0.4); --rowBgAlt: rgba(15,23,42,0.3);
+          --rowHov: rgba(59,130,246,0.06); --rowSticky: rgba(15,23,42,0.5);
+          --footBg: rgba(15,23,42,0.35); --filterPill: rgba(255,255,255,0.06);
+          --filterPillAct: rgba(255,255,255,0.12); --dimBg: rgba(30,41,59,0.75); --dimBrd: rgba(255,255,255,0.08);
+          --modalBg: rgba(30,41,59,0.85); --modalSh: 0 24px 80px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.06) inset;
+          --popupBg: rgba(30,41,59,0.88); --popupBrd: rgba(255,255,255,0.1);
+          --ctrlBg: rgba(30,41,59,0.75); --ctrlBrd: rgba(255,255,255,0.1);
+          --bodyBg: #0f172a;
+          `}
+        }
         .sr-row { transition: background 0.3s cubic-bezier(0.16,1,0.3,1); }
-        .sr-row:hover { background: ${lightMode ? "rgba(30,64,175,0.03)" : "rgba(59,130,246,0.06)"} !important; }
+        .sr-row:hover { background: var(--rowHov) !important; }
         .glass-card { transition: box-shadow 0.4s cubic-bezier(0.16,1,0.3,1), transform 0.4s cubic-bezier(0.16,1,0.3,1), background 0.3s ease; }
-        .glass-card:hover { box-shadow: 0 12px 40px rgba(0,0,0,0.10), 0 0 0 1px rgba(255,255,255,0.5) inset; transform: translateY(-1px); }
+        .glass-card:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
         .brut-btn { transition: all 0.2s cubic-bezier(0.16,1,0.3,1); }
         .brut-btn:hover { box-shadow: 4px 4px 0 rgba(0,0,0,0.18); transform: translate(-1px,-1px); }
         .brut-btn:active { box-shadow: 1px 1px 0 rgba(0,0,0,0.12); transform: translate(1px,1px); }
@@ -995,19 +1040,19 @@ export default function App() {
         select:focus, input:focus, textarea:focus { outline: none; border-color: #60a5fa !important; box-shadow: 0 0 0 4px rgba(96,165,250,0.1) !important; }
         ::-webkit-scrollbar { width: 0px; height: 0px; }
         * { scrollbar-width: none; }
-        body { background: ${lightMode ? "#dde5f2" : "#0f172a"} !important; margin: 0; }
+        body { background: var(--bodyBg) !important; margin: 0; }
         * { box-sizing: border-box; }
         .tab-content { animation: tabIn 0.4s cubic-bezier(0.16,1,0.3,1); }
-        .leaflet-popup-content-wrapper { background: rgba(255,255,255,0.78) !important; backdrop-filter: blur(40px) saturate(180%) !important; -webkit-backdrop-filter: blur(40px) saturate(180%) !important; color: #0f172a !important; border-radius: 16px !important; border: 1px solid rgba(255,255,255,0.4) !important; box-shadow: 0 12px 40px rgba(0,0,0,0.12), 0 0 0 1px rgba(255,255,255,0.3) inset !important; }
-        .leaflet-popup-tip { background: rgba(255,255,255,0.78) !important; box-shadow: none !important; }
-        .leaflet-popup-close-button { color: #94a3b8 !important; font-size: 18px !important; transition: color 0.2s; }
-        .leaflet-popup-close-button:hover { color: #0f172a !important; }
+        .leaflet-popup-content-wrapper { background: var(--popupBg) !important; backdrop-filter: blur(40px) saturate(180%) !important; -webkit-backdrop-filter: blur(40px) saturate(180%) !important; color: var(--tx) !important; border-radius: 16px !important; border: 1px solid var(--popupBrd) !important; box-shadow: var(--shadow) !important; }
+        .leaflet-popup-tip { background: var(--popupBg) !important; box-shadow: none !important; }
+        .leaflet-popup-close-button { color: var(--txD) !important; font-size: 18px !important; transition: color 0.2s; }
+        .leaflet-popup-close-button:hover { color: var(--tx) !important; }
         .leaflet-popup-content { margin: 16px 20px !important; }
         .leaflet-container { font-family: 'Inter', system-ui, sans-serif !important; }
-        .leaflet-control-layers { background: rgba(255,255,255,0.65) !important; backdrop-filter: blur(40px) saturate(180%) !important; -webkit-backdrop-filter: blur(40px) saturate(180%) !important; border: 1px solid rgba(255,255,255,0.35) !important; border-radius: 12px !important; box-shadow: 0 4px 24px rgba(0,0,0,0.06), 0 0 0 1px rgba(255,255,255,0.3) inset !important; padding: 8px 12px !important; font-family: 'Inter', system-ui, sans-serif !important; font-size: 11px !important; }
-        .leaflet-control-layers-toggle { width: 32px !important; height: 32px !important; border-radius: 8px !important; background-color: rgba(255,255,255,0.65) !important; backdrop-filter: blur(40px) !important; -webkit-backdrop-filter: blur(40px) !important; border: 1px solid rgba(255,255,255,0.35) !important; }
-        .leaflet-control-layers-separator { border-top-color: rgba(255,255,255,0.35) !important; }
-        .leaflet-control-layers label { font-size: 11px !important; color: #0f172a !important; }
+        .leaflet-control-layers { background: var(--ctrlBg) !important; backdrop-filter: blur(40px) saturate(180%) !important; -webkit-backdrop-filter: blur(40px) saturate(180%) !important; border: 1px solid var(--ctrlBrd) !important; border-radius: 12px !important; box-shadow: var(--shadowSm) !important; padding: 8px 12px !important; font-family: 'Inter', system-ui, sans-serif !important; font-size: 11px !important; }
+        .leaflet-control-layers-toggle { width: 32px !important; height: 32px !important; border-radius: 8px !important; background-color: var(--ctrlBg) !important; backdrop-filter: blur(40px) !important; -webkit-backdrop-filter: blur(40px) !important; border: 1px solid var(--ctrlBrd) !important; }
+        .leaflet-control-layers-separator { border-top-color: var(--ctrlBrd) !important; }
+        .leaflet-control-layers label { font-size: 11px !important; color: var(--tx) !important; }
         .site-marker { filter: drop-shadow(0 1px 3px rgba(0,0,0,0.2)); transition: filter 0.2s ease; }
         .site-marker:hover { filter: drop-shadow(0 3px 12px rgba(0,0,0,0.35)) brightness(1.15); }
         @keyframes tabIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
@@ -1022,27 +1067,33 @@ export default function App() {
       `}</style>
 
       {/* Header */}
-      <div style={{ background: lightMode ? "rgba(255,255,255,0.55)" : "rgba(15,23,42,0.65)", backdropFilter: "blur(48px) saturate(200%)", WebkitBackdropFilter: "blur(48px) saturate(200%)", borderBottom: `1px solid ${lightMode ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.08)"}`, boxShadow: lightMode ? "0 4px 24px rgba(0,0,0,0.04)" : "0 4px 24px rgba(0,0,0,0.2)", padding: "0 36px", position: "sticky", top: 0, zIndex: 100 }}>
+      <div style={{ background: "var(--hdrBg)", backdropFilter: "blur(48px) saturate(200%)", WebkitBackdropFilter: "blur(48px) saturate(200%)", borderBottom: "1px solid var(--hdrBrd)", boxShadow: "var(--hdrSh)", padding: "0 36px", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 68 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <div style={{ width: 40, height: 40, borderRadius: 11, background: "linear-gradient(135deg,#1e3a5f,#3b5998)", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12, color: "#fff", letterSpacing: "-0.02em", fontFamily: "inherit", boxShadow: "0 4px 12px rgba(30,58,95,0.35)" }}>1784</div>
             <div>
-              <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.025em", color: lightMode ? "#0f172a" : "#f1f5f9", lineHeight: 1.2 }}>Site Screener</div>
-              <div style={{ fontSize: 10.5, fontWeight: 500, color: lightMode ? "#64748b" : "#94a3b8", letterSpacing: "0.01em", marginTop: 1 }}>Storage Development Feasibility</div>
+              <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-0.025em", color: C.tx, lineHeight: 1.2 }}>Site Screener</div>
+              <div style={{ fontSize: 10.5, fontWeight: 500, color: C.txM, letterSpacing: "0.01em", marginTop: 1 }}>Storage Development Feasibility</div>
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 2, background: lightMode ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.06)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)", borderRadius: 14, padding: 4, border: `1px solid ${lightMode ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.08)"}`, boxShadow: lightMode ? "0 2px 12px rgba(0,0,0,0.04), 0 0 0 1px rgba(255,255,255,0.3) inset" : "none" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 2, background: "var(--tabBg)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)", borderRadius: 14, padding: 4, border: "1px solid var(--hdrBrd)", boxShadow: G.shadowSm }}>
             {tabList.map(([id, lbl]) => (
               <button key={id} onClick={() => setTab(id)} style={{
                 padding: "8px 18px", border: "none", borderRadius: 10, cursor: "pointer", fontFamily: "inherit",
-                background: tab === id ? (lightMode ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.14)") : "transparent",
-                color: tab === id ? (lightMode ? "#0f172a" : "#f1f5f9") : (lightMode ? "#64748b" : "#94a3b8"),
+                background: tab === id ? "var(--tabAct)" : "transparent",
+                color: tab === id ? C.tx : C.txM,
                 fontSize: 12.5, fontWeight: tab === id ? 650 : 500, letterSpacing: "-0.01em",
                 boxShadow: tab === id ? "0 2px 10px rgba(0,0,0,0.07), 0 0 0 1px rgba(255,255,255,0.55) inset" : "none",
                 transition: "all 0.25s cubic-bezier(0.16,1,0.3,1)",
               }}>{lbl}</button>
             ))}
           </div>
+          <button onClick={toggleTheme} title={lightMode ? "Switch to dark mode" : "Switch to light mode"} style={{
+            width: 36, height: 36, borderRadius: 10, border: "1px solid var(--hdrBrd)", background: "var(--tabBg)",
+            backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)", cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16,
+            boxShadow: G.shadowSm, transition: "all 0.25s ease", marginLeft: 8,
+          }}>{lightMode ? "\u{1F319}" : "\u2600\uFE0F"}</button>
         </div>
       </div>
 
@@ -1064,7 +1115,7 @@ export default function App() {
                 Paste Addresses — one per line
               </div>
               <textarea value={addrs} onChange={e => setAddrs(e.target.value)} rows={22}
-                style={{ width: "100%", padding: 18, borderRadius: 14, border: `1px solid ${lightMode ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.08)"}`, background: lightMode ? "rgba(255,255,255,0.65)" : "rgba(30,41,59,0.6)", backdropFilter: G.blurSm, WebkitBackdropFilter: G.blurSm, color: C.tx, fontSize: 12, lineHeight: 1.7, fontFamily: "'JetBrains Mono', monospace", resize: "vertical", outline: "none", boxSizing: "border-box", boxShadow: G.shadowSm }}
+                style={{ width: "100%", padding: 18, borderRadius: 14, border: "1px solid var(--hdrBrd)", background: "var(--textaBg)", backdropFilter: G.blurSm, WebkitBackdropFilter: G.blurSm, color: C.tx, fontSize: 12, lineHeight: 1.7, fontFamily: "'JetBrains Mono', monospace", resize: "vertical", outline: "none", boxSizing: "border-box", boxShadow: G.shadowSm }}
                 placeholder={"Paste addresses here — one per line:\n\n5050 Azle Ave, Fort Worth, TX 76106\n1427 E 1st St, Santa Ana, CA 92701\n\nOr paste from CoStar (tab-separated):\nAddress  Building SF  Acreage\n\nOr use pipes:\n1234 Main St, City, ST | 45000 SF | 2.1 ac\n\nProcesses in batches of " + BATCH_SIZE + "."} />
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
                 {!busy ? (
@@ -1183,11 +1234,11 @@ export default function App() {
               {/* Filters + actions */}
               <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap", padding: "0 2px" }}>
                 <span style={{ fontSize: 9, fontWeight: 700, color: C.txD, letterSpacing: ".07em" }}>FILTER</span>
-                <select value={fMkt} onChange={e => setFMkt(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, background: lightMode ? "#f1f5f9" : "#1e293b", color: C.tx, border: "none", fontSize: 11, fontFamily: "inherit", cursor: "pointer" }}>
+                <select value={fMkt} onChange={e => setFMkt(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, background: "var(--inputBg)", color: C.tx, border: "none", fontSize: 11, fontFamily: "inherit", cursor: "pointer" }}>
                   <option value="All">All Markets</option>
                   {mkts.map(m => <option key={m} value={m}>{m}</option>)}
                 </select>
-                <select value={fUse} onChange={e => setFUse(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, background: lightMode ? "#f1f5f9" : "#1e293b", color: C.tx, border: "none", fontSize: 11, fontFamily: "inherit", cursor: "pointer" }}>
+                <select value={fUse} onChange={e => setFUse(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, background: "var(--inputBg)", color: C.tx, border: "none", fontSize: 11, fontFamily: "inherit", cursor: "pointer" }}>
                   <option value="All">All Uses</option>
                   {["Self-Storage", "Either", "Unlikely"].map(u => <option key={u} value={u}>{u}</option>)}
                 </select>
@@ -1222,7 +1273,7 @@ export default function App() {
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
-                      <tr style={{ background: lightMode ? "rgba(255,255,255,0.4)" : "rgba(15,23,42,0.4)" }}>
+                      <tr style={{ background: "var(--rowBg)" }}>
                         <th style={{ padding: "10px 6px", textAlign: "center", fontSize: 10, fontWeight: 600, color: C.txD, borderBottom: `1px solid ${G.glassBrd}`, minWidth: 28 }}>
                           {(() => {
                             const allChecked = filtered.length > 0 && filtered.every(r => feasSelected.has(origIndex(r)));
@@ -1299,7 +1350,7 @@ export default function App() {
                             </td>
                           </tr>,
                           isExp && (
-                            <tr key={`d${i}`} style={{ background: lightMode ? "rgba(255,255,255,0.3)" : "rgba(15,23,42,0.3)" }}>
+                            <tr key={`d${i}`} style={{ background: "var(--rowBgAlt)" }}>
                               <td colSpan={filtered.some(r => r.building_sf) ? 15 : 14} style={{ padding: "16px 20px 18px", borderBottom: `1px solid ${G.glassBrd}` }}>
                                 <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
                                   <div style={{ flex: "1 1 300px" }}>
@@ -1442,18 +1493,18 @@ export default function App() {
               {/* Filter bar */}
               <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap", padding: "0 2px" }}>
                 <span style={{ fontSize: 9, fontWeight: 700, color: C.txD, letterSpacing: ".07em" }}>FILTER</span>
-                <select value={feasFMkt} onChange={e => setFeasFMkt(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, background: lightMode ? "#f1f5f9" : "#1e293b", color: C.tx, border: "none", fontSize: 11, fontFamily: "inherit", cursor: "pointer" }}>
+                <select value={feasFMkt} onChange={e => setFeasFMkt(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, background: "var(--inputBg)", color: C.tx, border: "none", fontSize: 11, fontFamily: "inherit", cursor: "pointer" }}>
                   <option value="All">All Markets</option>
                   {feasMkts.map(m => <option key={m} value={m}>{m}</option>)}
                 </select>
-                <select value={feasFPass} onChange={e => setFeasFPass(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, background: lightMode ? "#f1f5f9" : "#1e293b", color: C.tx, border: "none", fontSize: 11, fontFamily: "inherit", cursor: "pointer" }}>
+                <select value={feasFPass} onChange={e => setFeasFPass(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, background: "var(--inputBg)", color: C.tx, border: "none", fontSize: 11, fontFamily: "inherit", cursor: "pointer" }}>
                   <option value="all">All Status</option>
                   <option value="both">Pass Both</option>
                   <option value="zoning">Zoning OK</option>
                   <option value="gsf">Meets 90K</option>
                   <option value="neither">Neither</option>
                 </select>
-                <select value={feasFRisk} onChange={e => setFeasFRisk(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, background: lightMode ? "#f1f5f9" : "#1e293b", color: C.tx, border: "none", fontSize: 11, fontFamily: "inherit", cursor: "pointer" }}>
+                <select value={feasFRisk} onChange={e => setFeasFRisk(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, background: "var(--inputBg)", color: C.tx, border: "none", fontSize: 11, fontFamily: "inherit", cursor: "pointer" }}>
                   <option value="all">All Risk</option>
                   <option value="low">Low Risk</option>
                   <option value="medium">Medium Risk</option>
@@ -1484,7 +1535,7 @@ export default function App() {
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
-                      <tr style={{ background: lightMode ? "rgba(255,255,255,0.4)" : "rgba(15,23,42,0.4)" }}>
+                      <tr style={{ background: "var(--rowBg)" }}>
                         <th style={{ padding: "10px 6px", textAlign: "center", fontSize: 10, fontWeight: 600, color: C.txD, borderBottom: `1px solid ${G.glassBrd}`, minWidth: 28 }}>
                           {(() => {
                             const pbItems = feasFiltered.filter(item => item.passBoth);
@@ -1572,7 +1623,7 @@ export default function App() {
 
                           /* ── Expanded detail row ── */
                           isExp && (
-                            <tr key={`fd${i}`} style={{ background: lightMode ? "rgba(255,255,255,0.3)" : "rgba(15,23,42,0.3)" }}>
+                            <tr key={`fd${i}`} style={{ background: "var(--rowBgAlt)" }}>
                               <td colSpan={11} style={{ padding: "16px 20px 18px", borderBottom: `1px solid ${G.glassBrd}` }}>
                                 {f.address_flagged && (
                                   <div style={{ background: `${C.org}18`, border: `1px solid ${C.org}30`, borderRadius: 6, padding: "6px 10px", marginBottom: 12, fontSize: 11, color: C.org, fontWeight: 600 }}>
@@ -1856,6 +1907,10 @@ export default function App() {
                             </div>
                             {/* Favorite — save broker to CRM */}
                             <MapFavoriteBtn result={r} />
+                            {/* Assign existing CRM broker */}
+                            <div style={{ marginTop: 4 }}>
+                              <BrokerAssign resultId={r.id} popupMode label="Assign to Broker" />
+                            </div>
                           </div>
                         </Popup>
                       </CircleMarker>,
@@ -2036,7 +2091,7 @@ export default function App() {
                         <div style={{ maxHeight: 520, overflowY: "auto" }}>
                         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                           <thead>
-                            <tr style={{ background: lightMode ? "rgba(255,255,255,0.5)" : "rgba(15,23,42,0.5)", position: "sticky", top: 0, zIndex: 2, backdropFilter: G.blurSm, WebkitBackdropFilter: G.blurSm }}>
+                            <tr style={{ background: "var(--rowSticky)", position: "sticky", top: 0, zIndex: 2, backdropFilter: G.blurSm, WebkitBackdropFilter: G.blurSm }}>
                               {["Score", "Address", "Market", "CC $/SF", "Use", "Type", "Notes", ""].map(h => (
                                 <th key={h} style={{ padding: "10px 8px", textAlign: "left", fontSize: 9, fontWeight: 600, color: C.txD, letterSpacing: ".04em", borderBottom: `2px solid ${G.glassBrd}`, whiteSpace: "nowrap" }}>{h}</th>
                               ))}
@@ -2067,7 +2122,7 @@ export default function App() {
                         </table>
                         </div>
                         {/* Summary bar */}
-                        <div style={{ padding: "10px 14px", background: lightMode ? "rgba(255,255,255,0.35)" : "rgba(15,23,42,0.35)", borderTop: `1px solid ${G.glassBrd}`, display: "flex", gap: 16, fontSize: 10, color: C.txM }}>
+                        <div style={{ padding: "10px 14px", background: "var(--footBg)", borderTop: `1px solid ${G.glassBrd}`, display: "flex", gap: 16, fontSize: 10, color: C.txM }}>
                           <span>Avg Score: <strong style={{ color: C.tx, fontFamily: "'JetBrains Mono', monospace" }}>{(brokerDetail.sites.reduce((s, x) => s + (x.overall_score || 0), 0) / brokerDetail.sites.length).toFixed(1)}</strong></span>
                           <span>Markets: <strong style={{ color: C.tx }}>{[...new Set(brokerDetail.sites.map(s => s.market).filter(Boolean))].length}</strong></span>
                           <span>Top Tier: <strong style={{ color: C.grn }}>{brokerDetail.sites.filter(s => s.overall_score >= 7).length}</strong></span>
@@ -2088,10 +2143,10 @@ export default function App() {
                   <Btn onClick={() => setEditBroker({ name: "", company: "", email: "", phone: "", markets: "", specialty: "", status: "new", notes: "", last_contact: "", next_followup: "" })} primary>+ New Broker</Btn>
                 </div>
                 <StatRow items={[["Total", brokers.length, C.blue], ["Active", brokers.filter(b => b.status === "active").length, C.grn], ["Follow-up", brokers.filter(b => b.next_followup && new Date(b.next_followup) <= new Date()).length, C.red], ["Sites", brokers.reduce((s, b) => s + (b.site_count || 0), 0), C.pur]]} />
-                <div style={{ display: "flex", gap: 2, marginBottom: 16, background: lightMode ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.06)", backdropFilter: G.blurSm, WebkitBackdropFilter: G.blurSm, borderRadius: 10, padding: 3, width: "fit-content", border: `1px solid ${G.glassBrd}` }}>
+                <div style={{ display: "flex", gap: 2, marginBottom: 16, background: "var(--filterPill)", backdropFilter: G.blurSm, WebkitBackdropFilter: G.blurSm, borderRadius: 10, padding: 3, width: "fit-content", border: `1px solid ${G.glassBrd}` }}>
                   {["all", "active", "new", "cold"].map(f => (
                     <button key={f} onClick={() => setBrokerFilter(f)}
-                      style={{ padding: "6px 16px", borderRadius: 8, border: "none", background: brokerFilter === f ? (lightMode ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.12)") : "transparent", color: brokerFilter === f ? C.tx : C.txM, fontSize: 11, fontWeight: brokerFilter === f ? 600 : 500, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize", boxShadow: brokerFilter === f ? "0 1px 3px rgba(0,0,0,0.06), 0 0 0 1px rgba(255,255,255,0.4) inset" : "none", transition: "all 0.25s cubic-bezier(0.16,1,0.3,1)" }}>{f}</button>
+                      style={{ padding: "6px 16px", borderRadius: 8, border: "none", background: brokerFilter === f ? "var(--filterPillAct)" : "transparent", color: brokerFilter === f ? C.tx : C.txM, fontSize: 11, fontWeight: brokerFilter === f ? 600 : 500, cursor: "pointer", fontFamily: "inherit", textTransform: "capitalize", boxShadow: brokerFilter === f ? "0 1px 3px rgba(0,0,0,0.06), 0 0 0 1px rgba(255,255,255,0.4) inset" : "none", transition: "all 0.25s cubic-bezier(0.16,1,0.3,1)" }}>{f}</button>
                   ))}
                 </div>
                 {filteredBrokers.length === 0 ? (
@@ -2100,7 +2155,7 @@ export default function App() {
                   <div style={{ borderRadius: 14, overflow: "hidden", boxShadow: G.shadow, background: G.glass, backdropFilter: G.blur, WebkitBackdropFilter: G.blur, border: `1px solid ${G.glassBrd}` }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                       <thead>
-                        <tr style={{ background: lightMode ? "rgba(255,255,255,0.4)" : "rgba(15,23,42,0.4)" }}>
+                        <tr style={{ background: "var(--rowBg)" }}>
                           {["Name", "Company", "Markets", "Specialty", "Status", "Last Contact", "Follow-up", "Sites"].map(h => (
                             <th key={h} style={{ padding: "10px 10px", textAlign: "left", fontSize: 10, fontWeight: 600, color: C.txD, letterSpacing: ".04em", borderBottom: `2px solid ${G.glassBrd}`, whiteSpace: "nowrap" }}>{h}</th>
                           ))}
@@ -2199,11 +2254,11 @@ export default function App() {
         style={{
           position: "fixed", bottom: 20, right: 20,
           zIndex: 9999,
-          background: lightMode ? "rgba(255,255,255,0.65)" : "rgba(30,41,59,0.75)",
+          background: "var(--dimBg)",
           backdropFilter: "blur(20px) saturate(180%)",
           WebkitBackdropFilter: "blur(20px) saturate(180%)",
           borderRadius: 12,
-          border: `1px solid ${lightMode ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.08)"}`,
+          border: "1px solid var(--dimBrd)",
           padding: "8px 14px",
           display: "flex", alignItems: "center", gap: 8,
           boxShadow: "0 4px 24px rgba(0,0,0,0.12)",
@@ -2211,7 +2266,7 @@ export default function App() {
           transition: "all 0.2s ease",
           overflow: "hidden",
         }}>
-        <span style={{ fontSize: 10, fontWeight: 600, color: lightMode ? C.txM : "#94a3b8", letterSpacing: "0.05em", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>DIM</span>
+        <span style={{ fontSize: 10, fontWeight: 600, color: C.txM, letterSpacing: "0.05em", fontFamily: "'JetBrains Mono', monospace", whiteSpace: "nowrap" }}>DIM</span>
         <div style={{
           width: dimHover ? 80 : 0,
           opacity: dimHover ? 1 : 0,
