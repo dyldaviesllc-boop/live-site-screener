@@ -787,12 +787,14 @@ export default function App() {
 
   // ── Broker Assign (inline dropdown for Results/Feasibility tabs) ──────────
 
-  const BrokerAssign = ({ resultId, popupMode, label }) => {
+  const BrokerAssign = ({ resultId, address, popupMode, label }) => {
     const [open, setOpen] = useState(false);
     const [done, setDone] = useState(null); // broker name after assign
     const btnLabel = label || "Assign Broker";
+    // Resolve result ID: use provided ID, or look up by address from results array
+    const resolvedId = resultId || (address ? results.find(r => r.id && r.address === address)?.id : null);
 
-    if (!resultId) return <span style={{ fontSize: 10, color: C.txD, fontStyle: "italic" }}>Save to assign</span>;
+    if (!resolvedId) return <span style={{ fontSize: 10, color: C.txD, fontStyle: "italic" }}>No saved result — run screening first</span>;
 
     if (brokers.length === 0) return (
       <button onClick={(e) => { e.stopPropagation(); setTab("brokers"); }}
@@ -807,7 +809,7 @@ export default function App() {
       try {
         await fetch(`/api/brokers/${b.id}/sites`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ result_id: resultId, notes }),
+          body: JSON.stringify({ result_id: resolvedId, notes }),
         });
         setDone(b.name);
       } catch {}
@@ -841,16 +843,17 @@ export default function App() {
 
   const MapFavoriteBtn = ({ result: r }) => {
     const [saved, setSaved] = useState(false);
-    if (!r.id) return null;
     const bName = r.listing_broker && r.listing_broker !== "Unknown" ? r.listing_broker : null;
     if (!bName) return null; // Only show CRM button for individual brokers
     const bCo = r.listing_broker_co && r.listing_broker_co !== "Unknown" ? r.listing_broker_co : null;
+    // Resolve result ID with address fallback
+    const resolvedId = r.id || results.find(x => x.id && x.address === r.address)?.id || null;
 
     const inCRM = brokerNameSet.has(bName.toLowerCase());
 
     const handleFavorite = async () => {
       try {
-        await addBrokerToCRM(r, r.id);
+        await addBrokerToCRM(r, resolvedId);
         setSaved(true);
       } catch {}
     };
@@ -1160,7 +1163,7 @@ export default function App() {
               {/* Hero accent from Nano Banana AI */}
               <div style={{ marginBottom: -40, borderRadius: 14, overflow: "hidden", position: "relative" }}>
                 <div style={{ height: 110, backgroundImage: "url(/storage-hero.png)", backgroundSize: "cover", backgroundPosition: "center 35%", opacity: 0.15 }} />
-                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, transparent 30%, #ffffff 100%)" }} />
+                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, transparent 30%, var(--card) 100%)" }} />
               </div>
               <GlassCard accent="#1e3a5f" style={{ marginBottom: 16, padding: 20, position: "relative" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
@@ -1826,7 +1829,7 @@ export default function App() {
               </EmptyState>
             ) : (
               <div role="region" aria-label={`Site map showing ${mapSelection ? mapSelection.size : geoCount} of ${filtered.length} filtered locations`}
-                style={{ position: "relative", borderRadius: 18, overflow: "hidden", boxShadow: "0 4px 20px rgba(0,0,0,0.08), 0 0 1px rgba(0,0,0,0.06)", height: 640, background: "#f1f5f9" }}>
+                style={{ position: "relative", borderRadius: 18, overflow: "hidden", boxShadow: "0 4px 20px rgba(0,0,0,0.08), 0 0 1px rgba(0,0,0,0.06)", height: 640, background: C.sf }}>
                 <MapContainer
                   center={(() => {
                     const pts = filtered.filter(r => geoCache[r.address]?.lat && (!mapSelection || mapSelection.has(r.address))).map(r => geoCache[r.address]);
@@ -1874,33 +1877,33 @@ export default function App() {
                             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                               <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 22, borderRadius: 5, fontWeight: 800, fontSize: 13, background: `${color}18`, color, fontFamily: "inherit" }}>{score}</span>
                               <div>
-                                <div style={{ fontWeight: 700, fontSize: 12, color: "#0f172a", lineHeight: 1.3 }}>{r.address}</div>
-                                <div style={{ fontSize: 10, color: "#64748b" }}>{r.market}</div>
+                                <div style={{ fontWeight: 700, fontSize: 12, color: C.tx, lineHeight: 1.3 }}>{r.address}</div>
+                                <div style={{ fontSize: 10, color: C.txM }}>{r.market}</div>
                               </div>
                             </div>
-                            <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 10px", fontSize: 11, padding: "6px 0", borderTop: "1px solid #e2e8f0", borderBottom: "1px solid #e2e8f0" }}>
-                              <span style={{ color: "#64748b" }}>Use</span><span style={{ color: "#0f172a", fontWeight: 500 }}>{r.potential_use}</span>
-                              <span style={{ color: "#64748b" }}>Type</span><span style={{ color: "#0f172a", fontWeight: 500 }}>{r.inferred_type}</span>
-                              {r.est_cc_rate_psf_mo != null && (<><span style={{ color: "#64748b" }}>CC Rate</span><span style={{ fontWeight: 600, color: r.est_cc_rate_psf_mo >= 2.0 ? "#059669" : "#dc2626" }}>${r.est_cc_rate_psf_mo.toFixed(2)}/SF/mo</span></>)}
-                              {r.est_occupancy != null && (<><span style={{ color: "#64748b" }}>Occupancy</span><span style={{ color: "#0f172a", fontWeight: 500 }}>{r.est_occupancy}%</span></>)}
+                            <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 10px", fontSize: 11, padding: "6px 0", borderTop: `1px solid ${C.brd}`, borderBottom: `1px solid ${C.brd}` }}>
+                              <span style={{ color: C.txM }}>Use</span><span style={{ color: C.tx, fontWeight: 500 }}>{r.potential_use}</span>
+                              <span style={{ color: C.txM }}>Type</span><span style={{ color: C.tx, fontWeight: 500 }}>{r.inferred_type}</span>
+                              {r.est_cc_rate_psf_mo != null && (<><span style={{ color: C.txM }}>CC Rate</span><span style={{ fontWeight: 600, color: r.est_cc_rate_psf_mo >= 2.0 ? "#059669" : "#dc2626" }}>${r.est_cc_rate_psf_mo.toFixed(2)}/SF/mo</span></>)}
+                              {r.est_occupancy != null && (<><span style={{ color: C.txM }}>Occupancy</span><span style={{ color: C.tx, fontWeight: 500 }}>{r.est_occupancy}%</span></>)}
                               {((r.listing_broker && r.listing_broker !== "Unknown") || (r.broker_enriched && r.listing_broker_co && r.listing_broker_co !== "Unknown")) && (
-                                <><span style={{ color: "#64748b" }}>Broker</span><span style={{ color: "#6d28d9", fontWeight: 500 }}>{r.listing_broker && r.listing_broker !== "Unknown" ? r.listing_broker : ""}{r.listing_broker_co && r.listing_broker_co !== "Unknown" ? `${r.listing_broker && r.listing_broker !== "Unknown" ? " · " : ""}${r.listing_broker_co}` : ""}</span></>
+                                <><span style={{ color: C.txM }}>Broker</span><span style={{ color: C.pur, fontWeight: 500 }}>{r.listing_broker && r.listing_broker !== "Unknown" ? r.listing_broker : ""}{r.listing_broker_co && r.listing_broker_co !== "Unknown" ? `${r.listing_broker && r.listing_broker !== "Unknown" ? " · " : ""}${r.listing_broker_co}` : ""}</span></>
                               )}
                             </div>
                             {r.key_insight && (
-                              <div style={{ fontSize: 10, color: "#64748b", marginTop: 6, fontStyle: "italic", lineHeight: 1.4 }}>{r.key_insight}</div>
+                              <div style={{ fontSize: 10, color: C.txM, marginTop: 6, fontStyle: "italic", lineHeight: 1.4 }}>{r.key_insight}</div>
                             )}
                             {/* Navigation links */}
                             <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
                               <button onClick={() => { setExpAddr(r.address); setTab("results"); }}
                                 aria-label={`View ${r.address} in Results tab`}
-                                style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)", background: "rgba(255,255,255,0.45)", color: "#1e40af", fontSize: 10, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, transition: "all 0.15s" }}>
+                                style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: `1px solid ${G.glassBrd}`, background: G.glass, color: C.blue, fontSize: 10, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, transition: "all 0.15s" }}>
                                 Results →
                               </button>
                               {hasFeasData && (
                                 <button onClick={() => setTab("feasibility")}
                                   aria-label={`View ${r.address} feasibility analysis`}
-                                  style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.4)", background: "rgba(255,255,255,0.45)", color: "#0891b2", fontSize: 10, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, transition: "all 0.15s" }}>
+                                  style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: `1px solid ${G.glassBrd}`, background: G.glass, color: C.cyn, fontSize: 10, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, transition: "all 0.15s" }}>
                                   Feasibility →
                                 </button>
                               )}
@@ -1909,7 +1912,7 @@ export default function App() {
                             <MapFavoriteBtn result={r} />
                             {/* Assign existing CRM broker */}
                             <div style={{ marginTop: 4 }}>
-                              <BrokerAssign resultId={r.id} popupMode label="Assign to Broker" />
+                              <BrokerAssign resultId={r.id} address={r.address} popupMode label="Assign to Broker" />
                             </div>
                           </div>
                         </Popup>
@@ -1919,7 +1922,7 @@ export default function App() {
                 </MapContainer>
 
                 {/* Legend overlay */}
-                <div aria-label="Map legend" style={{ position: "absolute", bottom: 16, left: 16, zIndex: 1000, background: "rgba(255,255,255,0.65)", backdropFilter: "blur(40px) saturate(180%)", WebkitBackdropFilter: "blur(40px) saturate(180%)", borderRadius: 14, padding: "14px 18px", boxShadow: G.shadow, border: `1px solid ${G.glassBrd}`, pointerEvents: "auto", minWidth: 140 }}>
+                <div aria-label="Map legend" style={{ position: "absolute", bottom: 16, left: 16, zIndex: 1000, background: G.glass, backdropFilter: G.blur, WebkitBackdropFilter: G.blur, borderRadius: 14, padding: "14px 18px", boxShadow: G.shadow, border: `1px solid ${G.glassBrd}`, pointerEvents: "auto", minWidth: 140 }}>
                   <div style={{ fontSize: 9, fontWeight: 700, color: C.txD, letterSpacing: ".08em", marginBottom: 8 }}>SITE SCORES</div>
                   {[{ label: "Top Tier (7+)", color: C.grn, count: legendCounts.top },
                     { label: "Mid Tier (5-6)", color: C.yel, count: legendCounts.mid },
