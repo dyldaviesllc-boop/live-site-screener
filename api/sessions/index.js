@@ -24,10 +24,13 @@ export default async function handler(req, res) {
     const { name, criteria, results } = req.body;
     if (!results?.length) return res.status(400).json({ error: "No results" });
 
-    // Insert session
+    // Extract addresses for re-screen fallback
+    const addressesText = results.map(r => r.address).filter(Boolean).join("\n");
+
+    // Insert session (with addresses backup)
     const { data: session, error: sErr } = await supabase
       .from("sessions")
-      .insert({ name, address_count: results.length, criteria_json: JSON.stringify(criteria) })
+      .insert({ name, address_count: results.length, criteria_json: JSON.stringify(criteria), addresses_text: addressesText })
       .select()
       .single();
 

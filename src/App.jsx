@@ -499,10 +499,16 @@ export default function App() {
       const r = await fetch(`/api/sessions/${id}`);
       if (!r.ok) return;
       const data = await r.json();
-      const addresses = data.results.map(r => r.address).filter(Boolean);
+      // Try results first, fall back to stored addresses_text
+      let addresses = data.results?.map(r => r.address).filter(Boolean) || [];
+      if (!addresses.length && data.addresses_text) {
+        addresses = data.addresses_text.split("\n").filter(Boolean);
+      }
       if (addresses.length) {
         setAddrs(addresses.join("\n"));
         setTab("input");
+      } else {
+        setErrMsg("No addresses found for this session.");
       }
     } catch (err) { console.error("Re-screen error:", err); }
   };
@@ -2218,7 +2224,7 @@ export default function App() {
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 600 }}>{s.name}</div>
                       <div style={{ fontSize: 11, color: C.txD, marginTop: 2 }}>
-                        {new Date(s.created_at + "Z").toLocaleString()} | {s.result_count ?? s.address_count} sites
+                        {(() => { try { const d = new Date(s.created_at?.replace(" ", "T")); return isNaN(d) ? "" : d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }); } catch { return ""; } })()} · {s.result_count || s.address_count || 0} sites{s.result_count === 0 && s.address_count > 0 ? " (results pending)" : ""}
                       </div>
                     </div>
                     {s.avg_score != null && (
