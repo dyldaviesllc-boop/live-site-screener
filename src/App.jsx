@@ -703,6 +703,14 @@ export default function App() {
     // Persist market centers to localStorage for next session
     try { localStorage.setItem("ss_market_geo", JSON.stringify(marketGeoRef.current)); } catch {}
 
+    // Haversine distance (miles) between two lat/lng points
+    const haverMi = (a, b) => {
+      const R = 3959, toR = Math.PI / 180;
+      const dLat = (b.lat - a.lat) * toR, dLng = (b.lng - a.lng) * toR;
+      const s = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * toR) * Math.cos(b.lat * toR) * Math.sin(dLng / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(s));
+    };
+
     const cache = { ...geoCache };
     let lastFlush = 0;
     for (let i = 0; i < toGeo.length; i++) {
@@ -715,17 +723,23 @@ export default function App() {
         const vb = mktCenter ? `&viewbox=${mktCenter.lng - 0.8},${mktCenter.lat + 0.6},${mktCenter.lng + 0.8},${mktCenter.lat - 0.6}&bounded=1` : "";
         const resp = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us${vb}&q=${encodeURIComponent(geoQuery)}`, { headers: { "User-Agent": "SiteScreener/1.0" } });
         const data = await resp.json();
+        let result = null;
         if (data.length) {
-          cache[toGeo[i].address] = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+          result = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
         } else if (vb) {
-          // Fallback: retry without viewbox in case address is just outside the box
-          const resp2 = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=${encodeURIComponent(geoQuery)}`, { headers: { "User-Agent": "SiteScreener/1.0" } });
+          // Fallback: retry with wider box (2x radius) instead of unbounded
+          const vb2 = `&viewbox=${mktCenter.lng - 1.6},${mktCenter.lat + 1.2},${mktCenter.lng + 1.6},${mktCenter.lat - 1.2}&bounded=1`;
+          const resp2 = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us${vb2}&q=${encodeURIComponent(geoQuery)}`, { headers: { "User-Agent": "SiteScreener/1.0" } });
           const data2 = await resp2.json();
-          cache[toGeo[i].address] = data2.length ? { lat: parseFloat(data2[0].lat), lng: parseFloat(data2[0].lon) } : null;
+          if (data2.length) result = { lat: parseFloat(data2[0].lat), lng: parseFloat(data2[0].lon) };
           await new Promise(ok => setTimeout(ok, 1100));
-        } else {
-          cache[toGeo[i].address] = null;
         }
+        // Validate: reject if result is > 200 miles from market center (wrong city)
+        if (result && mktCenter && haverMi(result, mktCenter) > 200) {
+          console.warn(`Geocode rejected for "${addr}" — ${Math.round(haverMi(result, mktCenter))}mi from ${toGeo[i].market}`);
+          result = null;
+        }
+        cache[toGeo[i].address] = result;
       } catch { cache[toGeo[i].address] = null; }
       setGeoProgress({ done: i + 1, total: toGeo.length, active: i + 1 < toGeo.length });
       if (i === toGeo.length - 1 || i - lastFlush >= 3) { setGeoCache({ ...cache }); lastFlush = i; }
@@ -801,7 +815,7 @@ export default function App() {
     // Resolve result ID: use provided ID, or look up by address from results array
     const resolvedId = resultId || (address ? results.find(r => r.id && r.address === address)?.id : null);
 
-    if (!resolvedId) return <span style={{ fontSize: 10, color: C.txD, fontStyle: "italic" }}>No saved result — run screening first</span>;
+    if (!resolvedId) return null; // Hide broker assign when result isn't saved yet
 
     if (brokers.length === 0) return (
       <button onClick={(e) => { e.stopPropagation(); setTab("brokers"); }}
