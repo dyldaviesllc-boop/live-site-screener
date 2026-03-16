@@ -454,6 +454,8 @@ export default function App() {
       const parsed = data.results.map(r => ({
         ...r, criteria_flags: typeof r.criteria_flags === "string" ? (() => { try { return JSON.parse(r.criteria_flags); } catch { return []; } })() : (r.criteria_flags || []),
       }));
+      // Reset view state FIRST (clears old feas, filters, etc.) then load new data
+      resetViewState();
       setResults(parsed);
       setActiveSessionId(id);
       if (data.criteria_json) try { setCriteria(JSON.parse(data.criteria_json)); } catch {}
@@ -471,10 +473,7 @@ export default function App() {
           };
         }
         setFeasResults(fm);
-      } else {
-        setFeasResults({});
       }
-      resetViewState();
       setTab("results");
       setExpAddr(null); setFMkt("All"); setFUse("All"); setFMin(0);
       // Auto-enrich brokers for loaded sessions that haven't been enriched
