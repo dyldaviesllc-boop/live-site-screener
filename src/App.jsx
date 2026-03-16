@@ -631,10 +631,11 @@ export default function App() {
 
   const addBrokerToCRM = async (brokerData, resultId) => {
     const individualName = (brokerData.listing_broker && brokerData.listing_broker !== "Unknown") ? brokerData.listing_broker : null;
-    if (!individualName) return null; // Only add individual brokers to CRM
+    const companyName = (brokerData.listing_broker_co && brokerData.listing_broker_co !== "Unknown") ? brokerData.listing_broker_co : null;
+    if (!individualName && !companyName) return null;
     const res = await fetch("/api/brokers", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: individualName, company: brokerData.listing_broker_co || null, email: brokerData.listing_broker_email || null, phone: brokerData.listing_broker_phone || null, markets: brokerData.market || null, status: "active" }),
+      body: JSON.stringify({ name: individualName || companyName, company: companyName, email: brokerData.listing_broker_email || null, phone: brokerData.listing_broker_phone || null, markets: brokerData.market || null, status: "active" }),
     });
     const { id } = await res.json();
     if (resultId) await fetch(`/api/brokers/${id}/sites`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ result_id: resultId }) });
@@ -850,12 +851,12 @@ export default function App() {
   const MapFavoriteBtn = ({ result: r }) => {
     const [saved, setSaved] = useState(false);
     const bName = r.listing_broker && r.listing_broker !== "Unknown" ? r.listing_broker : null;
-    if (!bName) return null; // Only show CRM button for individual brokers
     const bCo = r.listing_broker_co && r.listing_broker_co !== "Unknown" ? r.listing_broker_co : null;
+    if (!bName && !bCo) return null; // Only show when we have broker info
     // Resolve result ID with address fallback
     const resolvedId = r.id || results.find(x => x.id && x.address === r.address)?.id || null;
 
-    const inCRM = brokerNameSet.has(bName.toLowerCase());
+    const inCRM = bName ? brokerNameSet.has(bName.toLowerCase()) : false;
 
     const handleFavorite = async () => {
       try {
@@ -864,7 +865,7 @@ export default function App() {
       } catch {}
     };
 
-    const label = `${bName}${bCo ? ` · ${bCo}` : ""}`;
+    const label = bName ? `${bName}${bCo ? ` · ${bCo}` : ""}` : bCo;
 
     if (inCRM || saved) return (
       <button disabled style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.grn}40`, background: `${C.grn}10`, color: C.grn, fontSize: 11, cursor: "default", fontFamily: "inherit", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8 }}>
@@ -874,7 +875,7 @@ export default function App() {
 
     return (
       <button onClick={handleFavorite}
-        style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.yel}50`, background: `${C.yel}12`, color: "#92400e", fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8, transition: "all 0.15s" }}>
+        style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.yel}50`, background: `${C.yel}12`, color: C.yel, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8, transition: "all 0.15s" }}>
         ☆ Save {label} to CRM
       </button>
     );
