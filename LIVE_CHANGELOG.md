@@ -2,6 +2,65 @@
 
 ---
 
+## v1.4.0 — Server Refactoring & Dark Mode (2026-03-20)
+
+### Refactored
+- **Modular server architecture** — Split monolithic `server.js` (~800 lines) into organized modules:
+  - `routes/screen.js` — Screening pipeline with live data integration
+  - `routes/feasibility.js` — Feasibility analysis with county parcel + zoning data
+  - `routes/brokers.js` — Broker CRUD + site linking
+  - `routes/sessions.js` — Session management
+  - `routes/data.js` — Live data, market rates, rate status endpoints
+  - `lib/claude.js` — Anthropic API caller with rate limiting, retries, JSON repair
+  - `lib/db.js` — Database initialization, schema, prepared statements
+  - `lib/geocode.js` — Nominatim geocoding with caching
+  - `lib/prompt.js` — Prompt builders, market rate data, criteria parsing
+  - `lib/rates.js` — Rate validation, capping, market rate lookup
+  - `server.js` — Now ~66 lines: imports routes/lib, auth middleware, SPA fallback
+- **`env-loader.js`** — Pre-loads `.env` before ES module imports via Node `--import` flag
+- **Vercel API routes consolidated** — Replaced nested routes with catch-all handlers:
+  - `api/brokers/[...path].js` replaces `api/brokers/[id].js`, `api/brokers/[brokerId]/sites.js`, `api/brokers/[brokerId]/sites/[resultId].js`
+  - `api/results/[...path].js` replaces `api/results/[id]/broker.js`, `api/results/search.js`
+- **`vercel.json`** — Rewrites map nested routes to catch-all handlers with query params
+
+### Added
+- **Dark mode** — Full theme toggle with CSS custom properties
+  - Custom properties: `--bg`, `--card`, `--brd`, `--tx`, `--txM`, `--txD`, `--glass`, `--glassBrd`, `--inputBg`, `--modalBg`
+  - Moon/sun toggle button in header
+  - Persists to `localStorage` as `ss-theme`
+  - All components themed: map popups, modals, tables, dropdowns, buttons, focus states
+- **Broker assignment on map** — Assign brokers directly from map popup
+  - BrokerAssign dropdown in popup with broker name + company list
+  - Saves via `POST /api/brokers/{id}/sites` with timestamped note
+  - Shows confirmation state after save
+- **Map popup enhancements** — Popups now show address, market, overall score, rates, and broker assignment
+- **`api/live-data.js`** — Centralized testing endpoint for live data inspection
+- **Site input metadata** — `POST /api/screen` now accepts `{sites: [{address, building_sf?, acreage?}]}` format
+
+### Changed
+- **Default screening criteria adjusted**:
+  - `cc_rate_min`: $1.75 → $2.00 (higher minimum floor)
+  - `cc_rate_max`: enabled → disabled (now optional)
+  - `occupancy_min`: enabled at 75 → disabled at 80
+  - `sf_per_capita_max`: 9.0 → 9.5 (increased tolerance)
+  - `pop_3mi_min` / `hhi_min`: `>` → `>=` (inclusive operators)
+- **`property_category` column** — Results grid now shows land vs. conversion category
+
+---
+
+## v1.3.0 — Bug Fixes: History, Feasibility, Map (2026-03-19)
+
+### Fixed
+- **Feasibility data wiped on session load** — `resetViewState()` now runs before loading new data instead of overwriting existing feasibility; DB integers normalized to booleans (`ss_permitted`, `ss_conditional`, etc.)
+- **Map popup broker assign** — Fixed geocoding accuracy issues in address matching for broker site links
+- **Map broker save with company-only brokers** — Popup no longer breaks when broker has `listing_broker_co` but no `listing_broker`; dark mode popup background now uses theme variable
+- **Map broker save event handling** — Fixed event delegation with `stopPropagation`, theme-aware popup colors
+- **History tab date parsing** — Robust date parsing with fallback for old sessions
+- **History tab site counts** — Proper count calculation from results array
+- **History tab re-screen** — Falls back to `addresses_text` if results unavailable; validates broker names on load and rejects group/firm names for re-enrichment
+
+---
+
 ## v1.2.0 — StorTrack API Integration (2026-03-19)
 
 ### Added
