@@ -16,7 +16,7 @@ try {
 
 const PORT = process.env.PORT || 3784;
 const API_KEY = process.env.ANTHROPIC_API_KEY;
-if (!API_KEY) { console.error("ANTHROPIC_API_KEY not set in .env"); process.exit(1); }
+if (!API_KEY) console.warn("⚠ ANTHROPIC_API_KEY not set — screening/feasibility will fail, but UI will load");
 
 // ── Live Data Integration ───────────────────────────────────────────────────
 import { getAvailableSources } from "./api/_lib/live/index.js";
