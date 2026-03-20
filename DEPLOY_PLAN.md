@@ -5,7 +5,7 @@
 > **Phase 2:** + Google Places + StorTrack (~$138-188/mo)
 > **Phase 3:** Team deployment on Azure (future)
 > **Editor:** VS Code (Bradley-approved)
-> **Updated:** 2026-03-19
+> **Updated:** 2026-03-20 (v1.5.0)
 
 ---
 
@@ -141,17 +141,42 @@ For addresses outside these counties: Census demographics still work (national),
 
 ---
 
-## Files Modified/Created
+## Architecture (v1.4.0+)
 
-### New Files
-- `api/_lib/live/county-config.js` — 15 county ArcGIS endpoint configs
-- `api/_lib/live/county-data.js` — Parcel + zoning data fetcher
-- `api/_lib/live/zoning-rules.js` — Zoning code → development standards parser
-- `COUNTY_PORTAL_REFERENCE.md` — Research reference for all county portals
+Server refactored into modular routes + shared libraries:
 
-### Modified Files
-- `api/_lib/live/index.js` — Added county data, removed ESRI + SerpAPI
-- `server.js` — Live data integration, county data in screening + feasibility, broker removal
-- `api/_lib/validate.js` — Rate capping with live StorTrack data
-- `src/App.jsx` — 100-site cap, CoStar scrubbed, broker buttons updated
-- `vite.config.js` — Added /api proxy to Express
+```
+server.js (66 lines — imports routes, auth, SPA fallback)
+  ├── routes/screen.js      → Screening pipeline (geocode → live data → Claude → validate)
+  ├── routes/feasibility.js → Feasibility analysis (parcel + zoning → Claude → structured)
+  ├── routes/brokers.js     → Broker CRUD + site assignment
+  ├── routes/sessions.js    → Session management
+  ├── routes/data.js        → Live data, market rates, rate status
+  ├── lib/claude.js         → Anthropic API caller (rate limiting, retries, JSON repair)
+  ├── lib/db.js             → SQLite schema + migrations + prepared statements
+  ├── lib/geocode.js        → Nominatim geocoding + cache
+  ├── lib/prompt.js         → System prompts, rate reference, criteria
+  └── lib/rates.js          → Rate validation, capping, market rate lookup
+```
+
+### Live Data Pipeline (`api/_lib/live/`)
+| File | Source | Status |
+|---|---|---|
+| `index.js` | Orchestrator — parallel fetch + rate priority | ✅ Live |
+| `census.js` | Census ACS demographics | ✅ Live |
+| `county-config.js` | 15 county ArcGIS endpoint configs | ✅ Live |
+| `county-data.js` | Parcel + zoning data fetcher | ✅ Live |
+| `google-places.js` | Competitor finder + rate estimator | ✅ Live (needs key) |
+| `reit-scraper.js` | In-store rate scraper from REIT pages | ✅ Live |
+| `stortrack.js` | StorTrack street rates (OAuth2) | ✅ Live (needs credentials) |
+| `tractiq.js` | TractIQ CMBS occupancy | ⏳ Stub |
+| `zoning-rules.js` | Zoning code → dev standards (Claude, cached) | ✅ Live |
+
+### Rate Priority (v1.5.0)
+1. REIT scraped in-store rates (highest accuracy)
+2. StorTrack street rates × 1.20 T12 factor
+3. T12 trailing-twelve-month history (≥3 months)
+4. Google Places estimated (benchmarks + density + demographics)
+5. Static REIT benchmarks (last resort — prompt tells Claude to prefer live data)
+
+See `POC_PLAN.md` for full methodology documentation.

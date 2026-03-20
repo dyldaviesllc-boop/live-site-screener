@@ -1,94 +1,180 @@
-# Live Site Screener — POC Integration Plan
+# Live Site Screener — Data Methodology & Source Log
 
 **Created:** March 17, 2026
-**Status:** Pre-implementation (awaiting API keys)
-**Base Project:** Forked from `site-screener` v1.2.3
+**Updated:** March 20, 2026
+**Status:** v1.5.0 — All core data sources live; static benchmarks demoted to last-resort fallback
 
 ---
 
-## Overview
+## Methodology Overview
 
-This project replaces AI-guessed data with live data sources while keeping Claude AI for subjective scoring and zoning analysis. The goal is a credible, self-deployable screening tool backed by real market data.
+This tool screens self-storage development sites using **live data from real APIs**, with Claude AI limited to **judgment and scoring only**. Every data point that can be sourced from a live API is — Claude never guesses demographics, rates, competitors, or parcel data.
+
+### Data Flow
+
+```
+Address → Nominatim geocode (free) → Census FIPS county detect (free)
+  ↓
+  Parallel live data fetches:
+    1. Census ACS API     → population, HHI, households         [LIVE, free]
+    2. County ArcGIS/Socrata → lot SF, bldg SF, owner, zoning   [LIVE, free]
+    3. Google Places API  → competitor facilities + brand mix    [LIVE, ~$64/mo]
+    4. REIT Facility Scraping → in-store rates from REIT pages  [LIVE, free]
+    5. StorTrack API      → street rates (when configured)      [LIVE, $49-99/mo]
+    6. TractIQ API        → CMBS occupancy (when configured)    [LIVE, $0 via firm]
+  ↓
+  All live data injected into Claude prompt
+  Claude does SCORING + JUDGMENT only (does NOT guess data)
+  ↓
+  Server-side rate validation + score capping
+  Results with source attribution per data point
+```
 
 ---
 
-## Current Data Sources (AI-Generated)
+## Live Data Sources (Priority Order)
 
-| Data Point | Current Source | Problem |
+### Tier 1: Always Available (Free)
+
+| Source | Data Points | API | Status |
+|---|---|---|---|
+| **US Census Bureau ACS** | Population, HHI, households, home values, median age | `api.census.gov/data/{year}/acs/acs5` | ✅ Live |
+| **FCC Census Block** | FIPS code, county detection | `geo.fcc.gov/api/census/block/find` | ✅ Live |
+| **County ArcGIS REST** (15 counties) | Lot SF, building SF, acreage, owner, zoning code, land use | Per-county ArcGIS/Socrata endpoints | ✅ Live |
+| **Nominatim** | Geocoding (lat/lng from address) | `nominatim.openstreetmap.org` | ✅ Live |
+
+### Tier 2: Requires API Keys
+
+| Source | Data Points | API | Status |
+|---|---|---|---|
+| **Google Places** | Competitor facilities, ratings, distance, brand tier | `places.googleapis.com/v1/places:searchText` | ✅ Built (needs key) |
+| **REIT Facility Scraping** | In-store CC/Non-CC rates from Public Storage, CubeSmart pages | JSON-LD + HTML parsing | ✅ Live (chains off Google Places) |
+| **StorTrack** | Street rates by facility, unit breakdown | `api.stortrack.com` (OAuth2 Password Flow) | ✅ Built (needs credentials) |
+| **TractIQ** | CMBS facility occupancy | `api.tractiq.com/v1/facilities` | ⏳ Stub (awaiting API docs) |
+
+### Tier 3: Optional Enhancements
+
+| Source | Data Points | Status |
 |---|---|---|
-| Population, HHI | Claude guess | Not census-accurate |
-| CC/Non-CC Rates | Claude guess + REIT guardrails | Not facility-level |
-| Occupancy | Claude guess | Often wrong |
-| SF/Capita | Claude guess (pop ÷ supply) | Both inputs are guesses |
-| Competitors | Claude training data | May be outdated/missing |
-| Broker Names | Web scrape (blocked by Google) | Non-functional |
-| Zoning/Feasibility | Claude AI | May contain errors |
+| **ESRI GeoEnrichment** | Current-year population estimates (more recent than Census) | ⏳ Stub (awaiting firm ESRI license) |
+| **T12 Rate History** | Trailing-twelve-month rate trends from stored REIT scrapes | ✅ Built (accumulates over time) |
 
 ---
 
-## Plan A: Minimal Viable Live Data (~$80-130/month)
+## Rate Data Priority Hierarchy
 
-### Sources
-| Source | Replaces | Cost | Status |
+The system uses a strict priority order for rate data. Higher priority sources always override lower ones:
+
+| Priority | Source | Type | Accuracy |
 |---|---|---|---|
-| US Census Bureau API | Population, HHI, households | Free | Ready to implement |
-| Google Places API | Competitor identification | ~$30-80/mo | Need API key |
-| SerpAPI | Fix broker scraping (Google search proxy) | $50/mo | Need API key |
+| 1 | **REIT Facility Scraping** | Real in-store rates from REIT pages (JSON-LD) | Highest — actual facility pricing |
+| 2 | **StorTrack API** | Street rates × 1.20 T12 factor | High — real market data |
+| 3 | **T12 History** | Trailing 12-month scraped averages (≥3 months required) | High — trend data |
+| 4 | **Google Places Estimated** | REIT benchmarks adjusted by competitor density, brand mix, demographics | Medium — modeled |
+| 5 | **Static REIT Benchmarks** | Hardcoded Yardi Matrix 2024-25 rates for 35+ metros | Low — last resort fallback |
 
-### What Changes
-- Demographics become real census data
-- Competitors become real Google business listings
-- Broker scraping works again via proxy
-- Rates and occupancy still AI-estimated
-
-### API Keys Required
-```
-CENSUS_API_KEY=           # Free at api.census.gov/data/key_signup.html
-GOOGLE_PLACES_API_KEY=    # Google Cloud Console → APIs & Services
-SERPAPI_KEY=              # serpapi.com signup
-```
+**v1.5.0 fix:** The prompt now explicitly tells Claude to prefer "LIVE MARKET DATA" injected per-site over static benchmarks. The rate priority race condition between StorTrack and REIT scraping has been resolved — REIT scraped always wins.
 
 ---
 
-## Plan B: Real Rates + Demographics (~$200-350/month)
+## What Is NOT Live Data
 
-### Sources (Plan A plus:)
-| Source | Replaces | Cost | Status |
-|---|---|---|---|
-| StorTrack API | CC/Non-CC street rates | $49-199/mo | Need subscription |
+These remain as static business logic / configuration, not data:
 
-### What Changes
-- Everything in Plan A
-- **Real street rates** for competitor facilities
-- Rate capping logic uses live market data instead of hardcoded REIT ranges
-- Biggest credibility upgrade — real $/SF from actual facilities
-
-### API Keys Required
-```
-STORTRACK_API_KEY=        # stortrack.com subscription
-```
+| Item | Type | Justification |
+|---|---|---|
+| **Score weighting formula** | Business logic | 40% rate + 20% market + 20% site + 10% location + 10% competition |
+| **Rate score caps** | Business logic | CC < $0.85 → max 3, etc. — firm's feasibility thresholds |
+| **Brand tier classifications** | Configuration | Regex patterns for Premium/Mid-tier/Independent brands |
+| **Demographic adjustment factors** | Configuration | HHI-based rate adjustment percentages |
+| **REIT benchmark table** | Static fallback | 35+ metro T12 CC rate ranges — only used when ALL live sources fail |
+| **Zoning heuristics** | Business logic | Typical setbacks, FAR, height — used when county data unavailable |
+| **Non-CC ratio** | Industry constant | Non-CC ≈ 78% of CC rate |
 
 ---
 
-## Plan C: Full Live Data (~$350-550/month)
+## County Coverage (15 Markets)
 
-### Sources (Plan B plus:)
-| Source | Replaces | Cost | Status |
-|---|---|---|---|
-| TractIQ | CMBS facility occupancy | $159-199/mo | Firm getting access |
-| ESRI GeoEnrichment | Enhanced demographics | ~$0 if firm license covers API | Check with firm |
+| Market | County | API Type | Parcel | Zoning | Tier |
+|---|---|---|---|---|---|
+| Los Angeles | LA County | ArcGIS REST | ✅ | ✅ | 1 |
+| Dallas | Dallas County | ArcGIS REST | ✅ | ✅ | 1 |
+| Fort Worth | Tarrant County | ArcGIS Hub | ✅ | ✅ | 1 |
+| Seattle | King County | ArcGIS + Socrata | ✅ | ✅ | 1 |
+| Phoenix | Maricopa County | ArcGIS REST | ✅ | ✅ | 1 |
+| Houston | Harris County | ArcGIS REST | ✅ | ⚠ No zoning | 2 |
+| Chicago | Cook County | Socrata (2-dataset join) | ✅ | ✅ | 1 |
+| New York City | NYC PLUTO | Socrata | ✅ | ✅ + FAR | 1 |
+| Denver | Denver County | ArcGIS REST | ✅ | ✅ | 1 |
+| Atlanta | Fulton County | ArcGIS Hub | ✅ | ✅ | 2 |
+| Nashville | Davidson County | ArcGIS REST | ✅ | ✅ | 2 |
+| Charlotte | Mecklenburg County | ArcGIS REST | ✅ | ✅ | 3 |
+| Orlando | Orange County FL | ArcGIS REST | ✅ | ✅ | 1 |
+| Tampa | Hillsborough County | ArcGIS REST | ✅ | ✅ | 3 |
+| Austin | Travis County | ArcGIS + Socrata | ✅ | ✅ | 2 |
 
-### What Changes
-- Everything in Plan B
-- Real occupancy data for CMBS-loan facilities (~20-30% of market)
-- ESRI proprietary demographic models (better than raw Census for current-year)
-- Only AI-generated data remaining: scores (appropriate) and zoning analysis
+For addresses outside these counties: Census demographics still work nationally. Parcel/zoning falls back to Claude estimation with a flag.
 
-### API Keys Required
-```
-TRACTIQ_API_KEY=          # From firm's TractIQ subscription
-ESRI_API_KEY=             # From firm's ESRI ArcGIS account
-```
+---
+
+## Prompt Methodology
+
+### Screening Prompt
+- System prompt includes score formula, rate caps, conversion logic
+- Static REIT benchmarks included as **fallback only** — prompt explicitly says to prefer live data
+- Per-site: live data context injected with source attribution ("LIVE MARKET DATA")
+- Claude scores sites 1-10 on 5 sub-dimensions; overall score computed server-side (not by AI)
+
+### Feasibility Prompt
+- Real zoning code from county ArcGIS injected into prompt
+- Real parcel dimensions (lot SF, building SF) injected
+- Claude parses municipal code for setbacks, FAR, height limits
+- Results cached per (city, zoning_code) to avoid redundant API calls
+- NYC PLUTO data parsed directly (structured data, no Claude needed)
+
+### Rate Validation (Server-Side)
+1. Get market rate reference from live data (if available) or static benchmarks (fallback)
+2. Clamp AI-estimated rates to market ceiling (high × 1.3)
+3. If no rate provided, estimate within range using location_score as proxy
+4. Apply hard score caps based on CC rate thresholds
+5. Recompute overall score with rate-weighted formula
+6. Block 9-10 scores unless all sub-scores are elite
+
+---
+
+## Implementation Files
+
+### Live Data Services (`api/_lib/live/`)
+| File | Source | Status |
+|---|---|---|
+| `census.js` | Census ACS demographics | ✅ Live |
+| `county-config.js` | 15 county ArcGIS endpoint configs | ✅ Live |
+| `county-data.js` | Parcel + zoning data fetcher | ✅ Live |
+| `google-places.js` | Competitor finder + rate estimator | ✅ Live (needs key) |
+| `reit-scraper.js` | In-store rate scraper from REIT pages | ✅ Live |
+| `stortrack.js` | StorTrack street rates | ✅ Live (needs credentials) |
+| `tractiq.js` | TractIQ CMBS occupancy | ⏳ Stub |
+| `esri.js` | ESRI GeoEnrichment | ⏳ Stub |
+| `zoning-rules.js` | Zoning code → development standards | ✅ Live (Claude parse, cached) |
+| `index.js` | Orchestrator — parallel fetch + rate priority | ✅ Live |
+
+### Server Routes (`routes/`)
+| File | Purpose |
+|---|---|
+| `screen.js` | Screening pipeline: geocode → live data → Claude → validate |
+| `feasibility.js` | Feasibility: parcel + zoning → Claude parse → structured output |
+| `brokers.js` | Broker CRUD + site assignment |
+| `sessions.js` | Session management |
+| `data.js` | Live data, market rates, rate status endpoints |
+
+### Shared Libraries (`lib/`)
+| File | Purpose |
+|---|---|
+| `claude.js` | Anthropic API caller with rate limiting, retries, JSON repair |
+| `db.js` | SQLite schema, migrations, prepared statements |
+| `geocode.js` | Nominatim geocoding with caching |
+| `prompt.js` | System prompts, rate reference, criteria formatting |
+| `rates.js` | Rate validation, capping, market rate lookup |
 
 ---
 
@@ -97,90 +183,12 @@ ESRI_API_KEY=             # From firm's ESRI ArcGIS account
 | Source | Risk | Notes |
 |---|---|---|
 | Census API | None | Public domain, no restrictions |
-| Google Places API | None | Licensed commercial API, standard ToS |
-| SerpAPI | Low | They assume Google ToS risk; you're a customer |
+| County ArcGIS/Socrata | None | Free public government APIs |
+| Google Places API | None | Licensed commercial API |
 | StorTrack API | None | Licensed commercial data |
+| REIT Facility Scraping | Low | Public web pages, JSON-LD structured data |
 | TractIQ | None | Licensed CMBS data |
 | ESRI API | None | Licensed through firm account |
-| LoopNet scraping | Medium | Technically violates ToS; low enforcement at low volume |
-| CoStar scraping | **HIGH** | They sue aggressively — do NOT scrape, use API only |
+| Claude AI | None | Licensed API, judgment only |
 
----
-
-## Self-Deploy Considerations
-
-- Each deployment needs its own API keys (cannot share one key across coworkers)
-- **Recommended:** Deploy one central instance, give coworkers login access
-- Vercel Hobby is free but single-user; Vercel Pro ($20/mo) for team
-- Supabase free tier (500MB) is sufficient for small team
-- Store API keys in Vercel environment variables, not in code
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────┐
-│  Frontend (React 19 SPA)                        │
-│  Same UI as site-screener                       │
-└──────────────┬──────────────────────────────────┘
-               │
-┌──────────────▼──────────────────────────────────┐
-│  API Layer (Vercel Serverless)                   │
-│                                                  │
-│  /api/screen         → Claude AI + live data     │
-│  /api/feasibility    → Claude AI (zoning)        │
-│  /api/enrich-brokers → SerpAPI + scrape          │
-│  /api/market-rates   → StorTrack or Census       │
-│  /api/demographics   → Census API (NEW)          │
-│  /api/competitors    → Google Places (NEW)       │
-│  /api/occupancy      → TractIQ (NEW)             │
-└──────────────┬──────────────────────────────────┘
-               │
-┌──────────────▼──────────────────────────────────┐
-│  Live Data Services (api/_lib/live/)             │
-│                                                  │
-│  census.js      → US Census Bureau ACS API       │
-│  google-places.js → Google Places Nearby Search  │
-│  stortrack.js   → StorTrack rate data            │
-│  tractiq.js     → TractIQ CMBS occupancy         │
-│  esri.js        → ESRI GeoEnrichment             │
-│  serpapi.js     → SerpAPI Google search proxy     │
-└──────────────┬──────────────────────────────────┘
-               │
-┌──────────────▼──────────────────────────────────┐
-│  Database (Supabase PostgreSQL)                  │
-│  Same schema as site-screener                    │
-└─────────────────────────────────────────────────┘
-```
-
----
-
-## Implementation Status
-
-| Module | File | Status |
-|---|---|---|
-| Census demographics | `api/_lib/live/census.js` | Built, needs API key to test |
-| Google Places competitors | `api/_lib/live/google-places.js` | Built, needs API key to test |
-| StorTrack rates | `api/_lib/live/stortrack.js` | Built, needs subscription |
-| TractIQ occupancy | `api/_lib/live/tractiq.js` | Stubbed, awaiting API docs |
-| ESRI demographics | `api/_lib/live/esri.js` | Stubbed, awaiting firm API access |
-| SerpAPI broker search | `api/_lib/live/serpapi.js` | Built, needs API key to test |
-| Screen endpoint (live) | `api/screen.js` | Integrated with Census + Places |
-| Broker endpoint (live) | `api/enrich-brokers.js` | Integrated with SerpAPI |
-| Market rates (live) | `api/market-rates.js` | Integrated with StorTrack |
-| Demographics endpoint | `api/demographics.js` | New endpoint, ready |
-| Competitors endpoint | `api/competitors.js` | New endpoint, ready |
-
----
-
-## Syncing UI from site-screener
-
-When UI changes are made to the original `site-screener` project:
-
-1. Check the changelog for what changed
-2. Copy updated `src/App.jsx` and any changed frontend files
-3. Do NOT overwrite: `api/`, `api/_lib/live/`, `.env`, `vercel.json`, `POC_PLAN.md`, `SYNC.md`
-4. Test that live data integrations still work after UI sync
-
-See `SYNC.md` for detailed instructions.
+All CoStar/LoopNet scraping eliminated. No proprietary data touches the app without a paid API license.

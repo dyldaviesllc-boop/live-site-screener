@@ -54,7 +54,8 @@ export function getMarketRate(metro) {
   return MARKET_RATES._default;
 }
 
-const RATE_REF_TEXT = `T12 CC $/SF/mo ranges (low–high): LA:1.65–3.00 SF:1.80–3.20 SJ:1.60–2.80 SD:1.40–2.50 NYC:1.80–3.50 BOS:1.40–2.40 DC:1.25–2.20 MIA:1.15–2.10 CHI:1.00–1.80 SEA:1.10–1.90 DEN:0.90–1.55 DAL:0.85–1.50 FTW:0.75–1.25 HOU:0.75–1.30 PHX:0.80–1.40 ATL:0.70–1.25 NSH:0.85–1.40 CLT:0.75–1.25 Natl:0.80–1.50. T12=15-27% above street.
+const RATE_REF_TEXT = `RATE DATA PRIORITY: If "LIVE MARKET DATA" is provided below a site address, use those real numbers — they come from live APIs (REIT facility scraping, StorTrack, Census, county GIS). Only fall back to these static benchmarks for sites WITHOUT live data.
+Static REIT benchmarks (T12 CC $/SF/mo, low–high): LA:1.65–3.00 SF:1.80–3.20 SJ:1.60–2.80 SD:1.40–2.50 NYC:1.80–3.50 BOS:1.40–2.40 DC:1.25–2.20 MIA:1.15–2.10 CHI:1.00–1.80 SEA:1.10–1.90 DEN:0.90–1.55 DAL:0.85–1.50 FTW:0.75–1.25 HOU:0.75–1.30 PHX:0.80–1.40 ATL:0.70–1.25 NSH:0.85–1.40 CLT:0.75–1.25 Natl:0.80–1.50. T12=15-27% above street.
 IMPORTANT: Vary rates per site using $0.05 increments — consider submarket quality, traffic, demographics, competition density, and property specifics. Do NOT give every site in a market the same rate. Premium locations get higher rates; weaker locations get lower.`;
 
 export function critText(criteria) {

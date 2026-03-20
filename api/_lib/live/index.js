@@ -105,10 +105,11 @@ export async function getSiteData(lat, lng, address, radiusMiles = 3, db = null)
       })
     : Promise.resolve();
 
-  // StorTrack (if configured)
+  // StorTrack (if configured) — stored separately; merged later with priority logic
+  let stortrackRates = null;
   const stortrackPromise = sources.stortrack
     ? getMarketRates(lat, lng, 5)
-        .then(r => { results.rates = r; results.sources_used.push("stortrack"); })
+        .then(r => { if (r && !r.error) { stortrackRates = r; results.sources_used.push("stortrack"); } })
         .catch(e => { console.warn("[live-data] StorTrack failed:", e.message); results.sources_failed.push("stortrack"); })
     : Promise.resolve();
 
@@ -143,8 +144,28 @@ export async function getSiteData(lat, lng, address, radiusMiles = 3, db = null)
   // Wait for all remaining parallel work
   await Promise.all([parcelPromise, competitorAndRatesPromise, stortrackPromise, tractiqPromise]);
 
-  // ── Fallback rate estimation (if scraping found nothing) ───────────────
+  // ── Rate priority: REIT scraped > StorTrack > T12 history > Google Places estimated ──
+  // REIT scraped rates (set during competitor scraping above) are the most accurate —
+  // real in-store pricing from facility pages. If those exist, keep them.
+  // Otherwise fall back through the hierarchy.
+  if (!results.rates && stortrackRates) {
+    // StorTrack street rates (×1.20 T12 factor already applied in parser)
+    results.rates = stortrackRates;
+  }
+  if (!results.rates && results.t12) {
+    // T12 trailing-twelve-month scraped history
+    results.rates = {
+      source: "t12_history",
+      market_rate_override: results.t12.cc_10x10_t12 ? {
+        low: results.t12.cc_10x10_t12.low,
+        high: results.t12.cc_10x10_t12.high,
+        typical: results.t12.cc_10x10_t12.median_psf,
+      } : null,
+    };
+    if (!results.sources_used.includes("t12_history")) results.sources_used.push("t12_history");
+  }
   if (!results.rates && results.competitors && !results.competitors.error) {
+    // Google Places estimated rates (REIT benchmarks + competitor density + demographics)
     const metro = detectMetro(address);
     const rateEstimate = estimateMarketRates(results.competitors, results.demographics, metro);
     if (rateEstimate && !rateEstimate.error) {
