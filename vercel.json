@@ -1,14 +1,15 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "framework": "vite",
   "functions": {
     "api/**/*.js": {
       "maxDuration": 60
     }
   },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/$1" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/api/brokers/:brokerId/sites/:resultId", "destination": "/api/brokers/:brokerId?sub=sites&resultId=:resultId" },
+    { "source": "/api/brokers/:brokerId/sites", "destination": "/api/brokers/:brokerId?sub=sites" },
+    { "source": "/api/results/:resultId/broker", "destination": "/api/results/:resultId?sub=broker" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }

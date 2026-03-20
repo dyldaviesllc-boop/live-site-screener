@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "site-screener",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 3785
+      "name": "live-site-screener",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--import", "./env-loader.js", "server.js"],
+      "port": 3784
     }
   ]
 }

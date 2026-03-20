@@ -2,12 +2,11 @@ import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { MapContainer, TileLayer, CircleMarker, Popup, LayersControl, useMap } from "react-leaflet";
 
 const BATCH_SIZE = 10;
+const MAX_SITES = 500;
 
 const DEFAULT_CRITERIA = {
   cc_rate_min:       { op: ">=", value: 2.00,    enabled: true,  label: "Climate Controlled Rate",     unit: "$/SF/mo",  step: 0.05 },
   cc_rate_max:       { op: "<",  value: 4.00,    enabled: false, label: "CC Rate Ceiling",             unit: "$/SF/mo",  step: 0.05 },
-  noncc_rate_min:    { op: ">=", value: 0.75,    enabled: false, label: "Non-Climate Rate",            unit: "$/SF/mo",  step: 0.05 },
-  noncc_rate_max:    { op: "<",  value: 3.00,    enabled: false, label: "Non-Climate Rate Ceiling",    unit: "$/SF/mo",  step: 0.05 },
   occupancy_min:     { op: ">",  value: 80,      enabled: false, label: "Market Occupancy",            unit: "%",        step: 1 },
   sf_per_capita_max: { op: "<=", value: 9.5,     enabled: true,  label: "SF Per Capita (Supply)",      unit: "SF",       step: 0.5 },
   pop_3mi_min:       { op: ">=", value: 50000,   enabled: true,  label: "Population (trade area)",     unit: "",         step: 5000 },
@@ -86,7 +85,7 @@ const SiteLinks = ({ address }) => (
 const BrokerVerifyLinks = ({ address, broker }) => {
   const q = encodeURIComponent(address);
   const omq = encodeURIComponent(`"${address}" "offering memorandum" OR "OM" filetype:pdf OR site:crexi.com OR site:loopnet.com OR site:ten-x.com`);
-  const verifyQ = encodeURIComponent(address + " commercial real estate for sale OR for lease site:loopnet.com OR site:crexi.com OR site:costar.com");
+  const verifyQ = encodeURIComponent(address + " commercial real estate for sale OR for lease");
   return (
     <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
       <ExtLink href={`https://www.google.com/search?q=${verifyQ}`} c={C.txD}>Verify</ExtLink>
@@ -194,14 +193,66 @@ function FitBounds({ points }) {
   return null;
 }
 
-// ── Site Line Parser (CoStar tab-delimited, pipe-delimited, or plain address) ─
+// ── Site Line Parser (tab-delimited, pipe-delimited, or plain address) ────────
+// Adaptive: handles plain addresses, simple "addr\tSF\tac", and full spreadsheet pastes
+// Spreadsheet format: Street | County,ST | Sub-market | City | State | Zip | Price | Yes/No | Acreage | LotSF
 function parseSiteLine(line) {
   const tabs = line.split("\t");
   if (tabs.length >= 2) {
+    const cols = tabs.map(t => t.trim());
+
+    // Detect spreadsheet: col1 has "City, ST" pattern or there's a 2-letter state code in cols 2-5
+    const hasLocationCol = /,\s*[A-Z]{2}\b/.test(cols[1] || "");
+    const hasStateCol = cols.slice(2, 6).some(c => /^[A-Z]{2}$/.test(c));
+    const isSpreadsheet = (cols.length >= 5) && (hasLocationCol || hasStateCol);
+
+    if (isSpreadsheet) {
+      // Find state (2-letter uppercase), zip (5-digit), and city (text near state)
+      let state = "", zip = "", city = "", stateIdx = -1;
+      for (let i = 1; i < Math.min(cols.length, 8); i++) {
+        if (/^[A-Z]{2}$/.test(cols[i]) && !state) { state = cols[i]; stateIdx = i; }
+        else if (/^\d{5}(-\d{4})?$/.test(cols[i]) && !zip) zip = cols[i];
+      }
+      // City is typically the column right before the state column
+      if (stateIdx > 1) {
+        const candidate = cols[stateIdx - 1];
+        if (/^[A-Za-z\s.'-]+$/.test(candidate) && candidate.length >= 2 && candidate.length < 35) {
+          city = candidate;
+        }
+      }
+      // Fallback: if col1 is "County, ST", try col3 as city
+      if (!city && hasLocationCol && cols[3] && /^[A-Za-z\s.'-]+$/.test(cols[3])) {
+        city = cols[3];
+      }
+
+      // Extract numeric data from remaining columns (after zip)
+      let building_sf = null, acreage = null;
+      const dataStart = zip ? cols.indexOf(zip) + 1 : (stateIdx > 0 ? stateIdx + 1 : 6);
+      for (let i = dataStart; i < cols.length; i++) {
+        const v = cols[i];
+        const num = parseFloat(v.replace(/[^0-9.]/g, ""));
+        if (isNaN(num) || num <= 0) continue;
+        if (v.toLowerCase().includes("ac")) { acreage = num; continue; }
+        // Heuristic: small numbers (< 200) are likely acreage, large (500-500K) are building SF
+        // Numbers > 500K are likely lot SF (not building) — skip those
+        if (num >= 500 && num <= 500000 && !building_sf) building_sf = num;
+        else if (num > 0 && num < 200 && !acreage) acreage = num;
+      }
+
+      // Build full address: "Street, City, State Zip"
+      let address = cols[0];
+      if (city && !address.toLowerCase().includes(city.toLowerCase())) address += `, ${city}`;
+      if (state && !address.includes(`, ${state}`)) address += `, ${state}`;
+      if (zip && !address.includes(zip)) address += ` ${zip}`;
+
+      return { address, building_sf, acreage };
+    }
+
+    // Simple format: address\tbuilding_sf\tacreage (col1 is numeric)
     return {
-      address: tabs[0].trim(),
-      building_sf: parseFloat(tabs[1]?.replace(/[^0-9.]/g, "")) || null,
-      acreage: parseFloat(tabs[2]?.replace(/[^0-9.]/g, "")) || null,
+      address: cols[0],
+      building_sf: parseFloat(cols[1]?.replace(/[^0-9.]/g, "")) || null,
+      acreage: parseFloat(cols[2]?.replace(/[^0-9.]/g, "")) || null,
     };
   }
   const pipes = line.split("|");
@@ -219,6 +270,138 @@ function parseSiteLine(line) {
   return { address: line.trim(), building_sf: null, acreage: null };
 }
 
+// ── Extracted sub-components (outside App to avoid re-creation on every render) ──
+
+function BrokerAssign({ resultId, address, popupMode, label, results, brokers, onNavigateBrokers }) {
+  const [open, setOpen] = useState(false);
+  const [done, setDone] = useState(null);
+  const btnLabel = label || "Assign Broker";
+  const resolvedId = resultId || (address ? results.find(r => r.id && r.address === address)?.id : null);
+
+  if (!resolvedId) return null;
+
+  if (brokers.length === 0) return (
+    <button onClick={(e) => { e.stopPropagation(); onNavigateBrokers(); }}
+      style={{ padding: "2px 8px", borderRadius: 4, border: `1px solid ${C.brd}`, background: "transparent", color: C.txD, fontSize: 10, cursor: "pointer", fontFamily: "inherit" }}>+ Add Broker</button>
+  );
+
+  if (done) return <Tag bg={`${C.pur}0a`} c={C.pur}>✓ {done}</Tag>;
+
+  const handleLink = async (b, e) => {
+    e.stopPropagation();
+    const notes = popupMode ? `Saved from map — ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}` : undefined;
+    try {
+      await fetch(`/api/brokers/${b.id}/sites`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ result_id: resolvedId, notes }),
+      });
+      setDone(b.name);
+    } catch {}
+    setOpen(false);
+  };
+
+  return (
+    <div style={{ position: "relative", display: popupMode ? "block" : "inline-block" }}>
+      <button onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        style={{ padding: popupMode ? "5px 10px" : "2px 8px", borderRadius: popupMode ? 5 : 4, border: `1px solid ${C.pur}40`, background: `${C.pur}10`, color: C.pur, fontSize: popupMode ? 11 : 10, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, width: popupMode ? "100%" : "auto" }}>
+        {btnLabel}
+      </button>
+      {open && (
+        <div onClick={e => e.stopPropagation()} style={{ position: popupMode ? "relative" : "absolute", top: popupMode ? 0 : "100%", left: 0, zIndex: 50, marginTop: 4, background: C.card, border: `1px solid ${C.brd}`, borderRadius: 8, padding: 4, minWidth: 200, boxShadow: popupMode ? "none" : G.shadow }}>
+          {brokers.map(b => (
+            <div key={b.id} onClick={(e) => handleLink(b, e)}
+              style={{ padding: "6px 10px", borderRadius: 4, cursor: "pointer", fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}
+              onMouseEnter={e => e.currentTarget.style.background = `${C.pur}0a`}
+              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span style={{ fontWeight: 500, color: C.tx }}>{b.name}</span>
+              <span style={{ color: C.txD, fontSize: 10 }}>{b.company || ""}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MapFavoriteBtn({ result: r, results, brokerNameSet, addBrokerToCRM }) {
+  const [saved, setSaved] = useState(false);
+  const bName = r.listing_broker && r.listing_broker !== "Unknown" ? r.listing_broker : null;
+  const bCo = r.listing_broker_co && r.listing_broker_co !== "Unknown" ? r.listing_broker_co : null;
+  const resolvedId = r.id || results.find(x => x.id && x.address === r.address)?.id || null;
+
+  if (!bName && !bCo) {
+    if (r.listing_url) return (
+      <a href={r.listing_url} target="_blank" rel="noopener noreferrer"
+        style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.blue}50`, background: `${C.blue}12`, color: C.blue, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8, textDecoration: "none", transition: "all 0.15s" }}>
+        View Listing ↗
+      </a>
+    );
+    return null;
+  }
+
+  const inCRM = bName ? brokerNameSet.has(bName.toLowerCase()) : false;
+
+  const handleFavorite = async () => {
+    try {
+      await addBrokerToCRM(r, resolvedId);
+      setSaved(true);
+    } catch {}
+  };
+
+  const label = bName ? `${bName}${bCo ? ` · ${bCo}` : ""}` : bCo;
+
+  if (inCRM || saved) return (
+    <button disabled style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.grn}40`, background: `${C.grn}10`, color: C.grn, fontSize: 11, cursor: "default", fontFamily: "inherit", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8 }}>
+      ★ {label} — Saved to CRM
+    </button>
+  );
+
+  return (
+    <button onClick={handleFavorite}
+      style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.yel}50`, background: `${C.yel}12`, color: C.yel, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8, transition: "all 0.15s" }}>
+      ☆ Save {label} to CRM
+    </button>
+  );
+}
+
+function CriteriaRow({ k, accent, criteria, onUpdate }) {
+  const c = criteria[k];
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, padding: "8px 12px", borderRadius: 10, background: c.enabled ? `${accent}06` : "transparent", transition: "background 0.2s ease" }}>
+      <input type="checkbox" checked={c.enabled} onChange={e => onUpdate(k, "enabled", e.target.checked)} style={{ accentColor: accent, cursor: "pointer" }} />
+      <div style={{ flex: 1, fontSize: 12, fontWeight: 500, color: c.enabled ? C.tx : C.txD }}>{c.label}</div>
+      <select value={c.op} disabled={!c.enabled} onChange={e => onUpdate(k, "op", e.target.value)}
+        style={{ width: 50, padding: "4px 2px", borderRadius: 6, fontSize: 13, fontWeight: 700, background: "var(--inputBg)", color: c.enabled ? C.yel : C.txD, border: "none", textAlign: "center", fontFamily: "'JetBrains Mono', monospace", WebkitAppearance: "none", MozAppearance: "none", appearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath fill='%2394a3b8' d='M0 0l4 5 4-5z'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 4px center", paddingRight: 14, cursor: "pointer" }}>
+        <option value=">">{">"}</option><option value="<">{"<"}</option><option value=">=">{">="}</option><option value="<=">{"<="}</option>
+      </select>
+      <input type="number" value={c.value} disabled={!c.enabled} step={c.step}
+        onChange={e => onUpdate(k, "value", parseFloat(e.target.value) || 0)}
+        style={{ width: 95, padding: "5px 8px", borderRadius: 8, fontSize: 13, background: "var(--inputBg)", color: c.enabled ? C.tx : C.txD, border: "none", fontFamily: "inherit", textAlign: "right" }} />
+      <span style={{ fontSize: 10, color: C.txD, minWidth: 54 }}>{c.unit}</span>
+    </div>
+  );
+}
+
+function CriteriaGroup({ title, icon, accent, keys, note, criteria, onUpdate }) {
+  return (
+    <GlassCard accent={accent}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: note ? 6 : 10 }}>
+        <div style={{
+          width: 34, height: 34, borderRadius: 10,
+          background: accent,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 15, fontWeight: 700, color: "#fff",
+          fontFamily: "inherit",
+          flexShrink: 0,
+        }}>{icon}</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.tx, letterSpacing: ".02em" }}>{title}</div>
+      </div>
+      {note && <div style={{ fontSize: 10, color: C.txD, marginBottom: 10, lineHeight: 1.5, paddingLeft: 44 }}>{note}</div>}
+      {keys.map(k => <CriteriaRow key={k} k={k} accent={accent} criteria={criteria} onUpdate={onUpdate} />)}
+    </GlassCard>
+  );
+}
+
 // ── Main App ─────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -232,6 +415,7 @@ export default function App() {
   const [addrs, setAddrs] = useState("");
   const [criteria, setCriteria] = useState(DEFAULT_CRITERIA);
   const [results, setResults] = useState([]);
+  const [liveSources, setLiveSources] = useState(null); // tracks active live data sources
   const [busy, setBusy] = useState(false);
   const [prog, setProg] = useState({ d: 0, t: 0 });
   const [sortK, setSortK] = useState("overall_score");
@@ -267,9 +451,6 @@ export default function App() {
   const [linkingSiteFor, setLinkingSiteFor] = useState(null);
   const [availableSites, setAvailableSites] = useState([]);
 
-  // Broker enrichment
-  const [enrichProg, setEnrichProg] = useState({ d: 0, t: 0, active: false });
-
   // Page dimming
   const [dim, setDim] = useState(0);
   const [dimHover, setDimHover] = useState(false);
@@ -299,7 +480,7 @@ export default function App() {
   const sites = useMemo(() => {
     const raw = addrs.split("\n").map(l => l.trim()).filter(l => l.length > 5);
     const unique = [...new Set(raw)];
-    return unique.map(parseSiteLine).filter(s => s.address.length > 5);
+    return unique.map(parseSiteLine).filter(s => s.address.length > 5).slice(0, MAX_SITES);
   }, [addrs]);
   const runBatch = useCallback(async (batch, attempt = 0) => {
     try {
@@ -317,6 +498,7 @@ export default function App() {
         }
         throw new Error(d.error);
       }
+      if (d.sources) setLiveSources(d.sources);
       return d.results;
     } catch (e) {
       if (attempt < 2 && (e.message.includes("fetch") || e.message.includes("Failed") || e.message.includes("network"))) {
@@ -330,7 +512,7 @@ export default function App() {
         address: s.address, building_sf: s.building_sf, acreage: s.acreage,
         overall_score: 0, location_score: 0, market_score: 0, site_potential: 0,
         competition_risk: 0, rate_environment: 0, potential_use: "Unknown", inferred_type: "Other",
-        property_category: null, est_cc_rate_psf_mo: null, est_noncc_rate_psf_mo: null,
+        property_category: null, est_cc_rate_psf_mo: null,
         est_occupancy: null, est_sf_per_capita: null, est_pop_trade_area: null, est_hhi: null,
         trade_area_miles: 3, nearby_comps: "Error", criteria_pass: 0, criteria_fail: 0,
         criteria_flags: [], key_insight: "Error: " + e.message, market: "Unknown",
@@ -390,70 +572,36 @@ export default function App() {
         if (data.resultIds) {
           const withIds = resultData.map((r, i) => ({ ...r, id: data.resultIds[i] }));
           setResults(withIds);
-          // Auto-trigger broker enrichment after IDs are assigned
-          setTimeout(() => enrichBrokers(withIds), 300);
         }
         loadSessions();
       }
     } catch (e) { console.error("Save error:", e); }
   };
 
-  // ── Broker enrichment (dedicated API call per 2 addresses) ─────────────────
-  const enrichBrokers = useCallback(async (resultData) => {
-    const toEnrich = resultData
-      .map((r, i) => ({ ...r, _idx: i }))
-      .filter(r => r.id && (!r.listing_broker || r.listing_broker === "Unknown" || !r.broker_enriched));
-    if (!toEnrich.length) return;
-    setEnrichProg({ d: 0, t: toEnrich.length, active: true });
-    const ENRICH_BATCH = 5;
-    for (let i = 0; i < toEnrich.length; i += ENRICH_BATCH) {
-      const batch = toEnrich.slice(i, i + ENRICH_BATCH);
-      try {
-        const r = await fetch("/api/enrich-brokers", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sites: batch.map(s => ({
-              address: s.address, inferred_type: s.inferred_type,
-              market: s.market, result_id: s.id,
-            })),
-          }),
-        });
-        const d = await r.json();
-        if (d.results) {
-          setResults(prev => {
-            const next = [...prev];
-            for (const enriched of d.results) {
-              const idx = batch.find(b => b.id === enriched.result_id)?._idx;
-              if (idx != null && next[idx]) {
-                next[idx] = {
-                  ...next[idx],
-                  listing_broker: enriched.listing_broker || next[idx].listing_broker,
-                  listing_broker_co: enriched.listing_broker_co || next[idx].listing_broker_co,
-                  listing_broker_phone: enriched.listing_broker_phone || next[idx].listing_broker_phone,
-                  listing_broker_email: enriched.listing_broker_email || next[idx].listing_broker_email,
-                  broker_confidence: enriched.confidence,
-                  broker_enriched: true,
-                };
-              }
-            }
-            return next;
-          });
-        }
-      } catch (e) { console.error("Enrich error:", e); }
-      setEnrichProg(p => ({ ...p, d: Math.min(i + ENRICH_BATCH, toEnrich.length) }));
-    }
-    setEnrichProg(p => ({ ...p, active: false }));
-    loadBrokers();
-  }, []);
-
   const loadSession = async (id) => {
     try {
       const r = await fetch(`/api/sessions/${id}`);
       if (!r.ok) return;
       const data = await r.json();
-      const parsed = data.results.map(r => ({
-        ...r, criteria_flags: typeof r.criteria_flags === "string" ? (() => { try { return JSON.parse(r.criteria_flags); } catch { return []; } })() : (r.criteria_flags || []),
-      }));
+      // Validate broker names on load — reject group/firm names so they get re-enriched
+      const invalidNameRx = /\b(Team|Group|Division|Advisory|Services|Department|Associates|Partners|Capital|Realty|Properties|Corporation|Inc|LLC|Corp)\s*$/i;
+      const isBadBrokerName = (name) => {
+        if (!name || name === "Unknown") return true;
+        const t = name.trim();
+        return invalidNameRx.test(t) || t.includes("&") || !/\s/.test(t);
+      };
+      const parsed = data.results.map(r => {
+        const clean = {
+          ...r, criteria_flags: typeof r.criteria_flags === "string" ? (() => { try { return JSON.parse(r.criteria_flags); } catch { return []; } })() : (r.criteria_flags || []),
+        };
+        // Clear invalid broker names so they get re-enriched with individual names
+        if (clean.listing_broker && isBadBrokerName(clean.listing_broker)) {
+          console.warn(`Broker name cleaned on load (group/invalid): "${clean.listing_broker}"`);
+          clean.listing_broker = null;
+          clean.broker_enriched = false;
+        }
+        return clean;
+      });
       // Reset view state FIRST (clears old feas, filters, etc.) then load new data
       resetViewState();
       setResults(parsed);
@@ -476,10 +624,6 @@ export default function App() {
       }
       setTab("results");
       setExpAddr(null); setFMkt("All"); setFUse("All"); setFMin(0);
-      // Auto-enrich brokers for loaded sessions that haven't been enriched
-      if (parsed.some(r => !r.listing_broker || r.listing_broker === "Unknown" || !r.broker_enriched)) {
-        setTimeout(() => enrichBrokers(parsed), 500);
-      }
     } catch (e) { console.error("Load error:", e); }
   };
 
@@ -567,6 +711,19 @@ export default function App() {
             f.address.toLowerCase().replace(/[.,]/g, "") === results[batch[j]].address.toLowerCase().replace(/[.,]/g, "")
           );
           if (fData) {
+            // Validate: reject residential zoning codes as "permitted" — SS never allowed in residential zones
+            const zCode = (fData.zoning_code || "").toUpperCase().trim();
+            const residentialRx = /^(R[-\s]?\d|RE|RA|RS|RD|RR|RW|A[-\s]?\d|AG|OS|PD-R|RPD|R1|R2|R3|R4|R5|RMF|RH|RL|VLDR|LDR|MDR|HDR)/;
+            const descLower = (fData.zoning_desc || "").toLowerCase();
+            const isResidential = residentialRx.test(zCode) || descLower.includes("single-family") || descLower.includes("residential");
+            if (isResidential && (fData.ss_permitted || fData.ss_conditional)) {
+              console.warn(`Residential zone "${zCode}" (${fData.zoning_desc}) rejected as SS-permitted for ${fData.address}`);
+              fData.ss_permitted = false;
+              fData.ss_conditional = false;
+              fData.ss_variance = true;
+              fData.zoning_risk = "high";
+              fData.zoning_path = `Residential zone ${zCode} — self-storage not permitted. Variance/rezone required.`;
+            }
             newResults[batch[j]] = { ...fData, result_id: results[batch[j]].id };
             done++;
           } else {
@@ -765,16 +922,16 @@ export default function App() {
   const actCrit = useMemo(() => Object.values(criteria).filter(c => c.enabled).length, [criteria]);
 
   const exportCSV = () => {
-    const h = ["#","Address","Overall","Location","Market Str","Site Pot","Competition","Rates","Use","Type","Metro","CC $/SF/mo","NonCC $/SF/mo","Occ%","SF/Cap","Pop Trade Area","Avg HHI","Trade Mi","Nearby Comps","Listing Broker","Brokerage","Pass","Fail","Flags","Insight","Google Maps","Google Search"];
-    const rows = filtered.map((r, i) => [i + 1, `"${r.address}"`, r.overall_score, r.location_score, r.market_score, r.site_potential, r.competition_risk, r.rate_environment, r.potential_use, r.inferred_type, `"${r.market}"`, r.est_cc_rate_psf_mo ?? "", r.est_noncc_rate_psf_mo ?? "", r.est_occupancy ?? "", r.est_sf_per_capita ?? "", r.est_pop_trade_area ?? "", r.est_hhi ?? "", r.trade_area_miles ?? "", `"${(r.nearby_comps || "").replace(/"/g, "'")}"`, `"${(r.listing_broker || "").replace(/"/g, "'")}"`, `"${(r.listing_broker_co || "").replace(/"/g, "'")}"`, r.criteria_pass, r.criteria_fail, `"${(r.criteria_flags || []).join("; ")}"`, `"${(r.key_insight || "").replace(/"/g, "'")}"`, `"https://www.google.com/maps/search/${encodeURIComponent(r.address)}"`, `"https://www.google.com/search?q=${encodeURIComponent(r.address)}"`]);
+    const h = ["#","Address","Overall","Location","Market Str","Site Pot","Competition","Rates","Use","Type","Metro","CC $/SF/mo","Occ%","SF/Cap","Pop Trade Area","Avg HHI","Trade Mi","Nearby Comps","Listing Broker","Brokerage","Pass","Fail","Flags","Insight","County","Zoning Code","Land Use","Owner","Building SF","Acreage","Data Sources","Google Maps","Google Search"];
+    const rows = filtered.map((r, i) => [i + 1, `"${r.address}"`, r.overall_score, r.location_score, r.market_score, r.site_potential, r.competition_risk, r.rate_environment, r.potential_use, r.inferred_type, `"${r.market}"`, r.est_cc_rate_psf_mo ?? "", r.est_occupancy ?? "", r.est_sf_per_capita ?? "", r.est_pop_trade_area ?? "", r.est_hhi ?? "", r.trade_area_miles ?? "", `"${(r.nearby_comps || "").replace(/"/g, "'")}"`, `"${(r.listing_broker || "").replace(/"/g, "'")}"`, `"${(r.listing_broker_co || "").replace(/"/g, "'")}"`, r.criteria_pass, r.criteria_fail, `"${(r.criteria_flags || []).join("; ")}"`, `"${(r.key_insight || "").replace(/"/g, "'")}"`, `"${r._county || ""}"`, `"${r._zoning_code || ""}"`, `"${(r._land_use || "").replace(/"/g, "'")}"`, `"${(r._owner || "").replace(/"/g, "'")}"`, r.building_sf ?? "", r.acreage ?? "", `"${(r._live_sources || []).join(", ")}"`, `"https://www.google.com/maps/search/${encodeURIComponent(r.address)}"`, `"https://www.google.com/search?q=${encodeURIComponent(r.address)}"`]);
     const csv = [h.join(","), ...rows.map(r => r.join(","))].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `1784_screener_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
   };
 
   const exportFeasCSV = () => {
-    const h = ["#","Address","Market","Score","CC $/SF/mo","NonCC $/SF/mo","Occ%","Zoning Code","Zoning Status","Risk","Parcel Ac","Achievable GSF","Meets 90K","Pass Both","Zoning Path","Dev Notes","Google Maps"];
-    const rows = feasFiltered.map((item, i) => { const r = item._r, f = item._f; return [i + 1, `"${r.address}"`, `"${r.market}"`, r.overall_score, r.est_cc_rate_psf_mo ?? "", r.est_noncc_rate_psf_mo ?? "", r.est_occupancy ?? "", `"${f.zoning_code || ""}"`, item.zoningLabel, f.zoning_risk || "", f.parcel_acres ?? "", f.achievable_gsf ?? "", f.meets_90k ? "YES" : "NO", item.passBoth ? "YES" : "NO", `"${(f.zoning_path || "").replace(/"/g, "'")}"`, `"${(f.development_notes || "").replace(/"/g, "'")}"`, `"https://www.google.com/maps/search/${encodeURIComponent(r.address)}"`]; });
+    const h = ["#","Address","Market","Score","CC $/SF/mo","Occ%","Zoning Code","Zoning Status","Risk","Parcel Ac","Achievable GSF","Meets 90K","Pass Both","Zoning Path","Dev Notes","Google Maps"];
+    const rows = feasFiltered.map((item, i) => { const r = item._r, f = item._f; return [i + 1, `"${r.address}"`, `"${r.market}"`, r.overall_score, r.est_cc_rate_psf_mo ?? "", r.est_occupancy ?? "", `"${f.zoning_code || ""}"`, item.zoningLabel, f.zoning_risk || "", f.parcel_acres ?? "", f.achievable_gsf ?? "", f.meets_90k ? "YES" : "NO", item.passBoth ? "YES" : "NO", `"${(f.zoning_path || "").replace(/"/g, "'")}"`, `"${(f.development_notes || "").replace(/"/g, "'")}"`, `"https://www.google.com/maps/search/${encodeURIComponent(r.address)}"`]; });
     const csv = [h.join(","), ...rows.map(r => r.join(","))].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `1784_feasibility_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
@@ -805,132 +962,7 @@ export default function App() {
   const origIndexMap = useMemo(() => { const m = new WeakMap(); results.forEach((r, i) => m.set(r, i)); return m; }, [results]);
   const origIndex = (r) => origIndexMap.get(r) ?? -1;
 
-  // ── Broker Assign (inline dropdown for Results/Feasibility tabs) ──────────
-
-  const BrokerAssign = ({ resultId, address, popupMode, label }) => {
-    const [open, setOpen] = useState(false);
-    const [done, setDone] = useState(null); // broker name after assign
-    const btnLabel = label || "Assign Broker";
-    // Resolve result ID: use provided ID, or look up by address from results array
-    const resolvedId = resultId || (address ? results.find(r => r.id && r.address === address)?.id : null);
-
-    if (!resolvedId) return null; // Hide broker assign when result isn't saved yet
-
-    if (brokers.length === 0) return (
-      <button onClick={(e) => { e.stopPropagation(); setTab("brokers"); }}
-        style={{ padding: "2px 8px", borderRadius: 4, border: `1px solid ${C.brd}`, background: "transparent", color: C.txD, fontSize: 10, cursor: "pointer", fontFamily: "inherit" }}>+ Add Broker</button>
-    );
-
-    if (done) return <Tag bg={`${C.pur}0a`} c={C.pur}>✓ {done}</Tag>;
-
-    const handleLink = async (b, e) => {
-      e.stopPropagation();
-      const notes = popupMode ? `Saved from map — ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}` : undefined;
-      try {
-        await fetch(`/api/brokers/${b.id}/sites`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ result_id: resolvedId, notes }),
-        });
-        setDone(b.name);
-      } catch {}
-      setOpen(false);
-    };
-
-    return (
-      <div style={{ position: "relative", display: popupMode ? "block" : "inline-block" }}>
-        <button onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
-          style={{ padding: popupMode ? "5px 10px" : "2px 8px", borderRadius: popupMode ? 5 : 4, border: `1px solid ${C.pur}40`, background: `${C.pur}10`, color: C.pur, fontSize: popupMode ? 11 : 10, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, width: popupMode ? "100%" : "auto" }}>
-          {btnLabel}
-        </button>
-        {open && (
-          <div onClick={e => e.stopPropagation()} style={{ position: popupMode ? "relative" : "absolute", top: popupMode ? 0 : "100%", left: 0, zIndex: 50, marginTop: 4, background: C.card, border: `1px solid ${C.brd}`, borderRadius: 8, padding: 4, minWidth: 200, boxShadow: popupMode ? "none" : G.shadow }}>
-            {brokers.map(b => (
-              <div key={b.id} onClick={(e) => handleLink(b, e)}
-                style={{ padding: "6px 10px", borderRadius: 4, cursor: "pointer", fontSize: 11, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}
-                onMouseEnter={e => e.currentTarget.style.background = `${C.pur}0a`}
-                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                <span style={{ fontWeight: 500, color: C.tx }}>{b.name}</span>
-                <span style={{ color: C.txD, fontSize: 10 }}>{b.company || ""}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // ── Map favorite button — saves broker to CRM on click ────────────────────
-
-  const MapFavoriteBtn = ({ result: r }) => {
-    const [saved, setSaved] = useState(false);
-    const bName = r.listing_broker && r.listing_broker !== "Unknown" ? r.listing_broker : null;
-    const bCo = r.listing_broker_co && r.listing_broker_co !== "Unknown" ? r.listing_broker_co : null;
-    if (!bName && !bCo) return null; // Only show when we have broker info
-    // Resolve result ID with address fallback
-    const resolvedId = r.id || results.find(x => x.id && x.address === r.address)?.id || null;
-
-    const inCRM = bName ? brokerNameSet.has(bName.toLowerCase()) : false;
-
-    const handleFavorite = async () => {
-      try {
-        await addBrokerToCRM(r, resolvedId);
-        setSaved(true);
-      } catch {}
-    };
-
-    const label = bName ? `${bName}${bCo ? ` · ${bCo}` : ""}` : bCo;
-
-    if (inCRM || saved) return (
-      <button disabled style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.grn}40`, background: `${C.grn}10`, color: C.grn, fontSize: 11, cursor: "default", fontFamily: "inherit", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8 }}>
-        ★ {label} — Saved to CRM
-      </button>
-    );
-
-    return (
-      <button onClick={handleFavorite}
-        style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: `1px solid ${C.yel}50`, background: `${C.yel}12`, color: C.yel, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8, transition: "all 0.15s" }}>
-        ☆ Save {label} to CRM
-      </button>
-    );
-  };
-
-  // ── Criteria sub-components ────────────────────────────────────────────────
-
-  const CriteriaRow = ({ k, accent }) => {
-    const c = criteria[k];
-    return (
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, padding: "8px 12px", borderRadius: 10, background: c.enabled ? `${accent}06` : "transparent", transition: "background 0.2s ease" }}>
-        <input type="checkbox" checked={c.enabled} onChange={e => upd(k, "enabled", e.target.checked)} style={{ accentColor: accent, cursor: "pointer" }} />
-        <div style={{ flex: 1, fontSize: 12, fontWeight: 500, color: c.enabled ? C.tx : C.txD }}>{c.label}</div>
-        <select value={c.op} disabled={!c.enabled} onChange={e => upd(k, "op", e.target.value)}
-          style={{ width: 50, padding: "4px 2px", borderRadius: 6, fontSize: 13, fontWeight: 700, background: "var(--inputBg)", color: c.enabled ? C.yel : C.txD, border: "none", textAlign: "center", fontFamily: "'JetBrains Mono', monospace", WebkitAppearance: "none", MozAppearance: "none", appearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath fill='%2394a3b8' d='M0 0l4 5 4-5z'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 4px center", paddingRight: 14, cursor: "pointer" }}>
-          <option value=">">{">"}</option><option value="<">{"<"}</option><option value=">=">{">="}</option><option value="<=">{"<="}</option>
-        </select>
-        <input type="number" value={c.value} disabled={!c.enabled} step={c.step}
-          onChange={e => upd(k, "value", parseFloat(e.target.value) || 0)}
-          style={{ width: 95, padding: "5px 8px", borderRadius: 8, fontSize: 13, background: "var(--inputBg)", color: c.enabled ? C.tx : C.txD, border: "none", fontFamily: "inherit", textAlign: "right" }} />
-        <span style={{ fontSize: 10, color: C.txD, minWidth: 54 }}>{c.unit}</span>
-      </div>
-    );
-  };
-
-  const CriteriaGroup = ({ title, icon, accent, keys, note }) => (
-    <GlassCard accent={accent}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: note ? 6 : 10 }}>
-        <div style={{
-          width: 34, height: 34, borderRadius: 10,
-          background: accent,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 15, fontWeight: 700, color: "#fff",
-          fontFamily: "inherit",
-          flexShrink: 0,
-        }}>{icon}</div>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.tx, letterSpacing: ".02em" }}>{title}</div>
-      </div>
-      {note && <div style={{ fontSize: 10, color: C.txD, marginBottom: 10, lineHeight: 1.5, paddingLeft: 44 }}>{note}</div>}
-      {keys.map(k => <CriteriaRow key={k} k={k} accent={accent} />)}
-    </GlassCard>
-  );
+  // BrokerAssign, MapFavoriteBtn, CriteriaRow, CriteriaGroup — defined above App()
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -1139,11 +1171,14 @@ export default function App() {
               </div>
               <textarea value={addrs} onChange={e => setAddrs(e.target.value)} rows={22}
                 style={{ width: "100%", padding: 18, borderRadius: 14, border: "1px solid var(--hdrBrd)", background: "var(--textaBg)", backdropFilter: G.blurSm, WebkitBackdropFilter: G.blurSm, color: C.tx, fontSize: 12, lineHeight: 1.7, fontFamily: "'JetBrains Mono', monospace", resize: "vertical", outline: "none", boxSizing: "border-box", boxShadow: G.shadowSm }}
-                placeholder={"Paste addresses here — one per line:\n\n5050 Azle Ave, Fort Worth, TX 76106\n1427 E 1st St, Santa Ana, CA 92701\n\nOr paste from CoStar (tab-separated):\nAddress  Building SF  Acreage\n\nOr use pipes:\n1234 Main St, City, ST | 45000 SF | 2.1 ac\n\nProcesses in batches of " + BATCH_SIZE + "."} />
+                placeholder={"Paste addresses here — one per line (max " + MAX_SITES + "):\n\n5050 Azle Ave, Fort Worth, TX 76106\n1427 E 1st St, Santa Ana, CA 92701\n4200 Main St, Houston, TX 77002\n\nParcel data, zoning, and competitor rates\npulled automatically from live sources."} />
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
                 {!busy ? (
                   <>
                     <Btn onClick={run} disabled={!sites.length} primary>Screen {sites.length || 0} Sites</Btn>
+                    {addrs.split("\n").filter(l => l.trim().length > 5).length > MAX_SITES && (
+                      <span style={{ fontSize: 11, color: C.org, fontWeight: 600 }}>Capped at {MAX_SITES} sites</span>
+                    )}
                     {(addrs.trim() || results.length > 0) && (
                       <button onClick={() => { setAddrs(""); setResults([]); setActiveSessionId(null); setExpAddr(null); setErrMsg(""); setProg({ d: 0, t: 0 }); resetViewState(); setTab("input"); }}
                         style={{ padding: "8px 16px", borderRadius: 6, border: `1px solid ${C.txD}40`, background: "transparent", color: C.txD, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s" }}>
@@ -1155,7 +1190,7 @@ export default function App() {
                   <button onClick={() => { stopRef.current = true; setBusy(false); }} style={{ padding: "8px 20px", borderRadius: 6, border: `1px solid ${C.red}`, background: "transparent", color: C.red, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Stop</button>
                 )}
                 {busy && <span style={{ fontSize: 12, color: C.txM }}>Screening {prog.d}/{prog.t}...</span>}
-                <span style={{ fontSize: 11, color: C.txD, marginLeft: "auto" }}>{sites.length} addresses{sites.filter(s => s.building_sf).length > 0 ? ` | ${sites.filter(s => s.building_sf).length} with building data` : ""} | {actCrit} criteria</span>
+                <span style={{ fontSize: 11, color: C.txD, marginLeft: "auto" }}>{sites.length} addresses | {actCrit} criteria</span>
               </div>
               {busy && (
                 <>
@@ -1207,9 +1242,11 @@ export default function App() {
                   <span style={{ fontSize: 11, fontWeight: 700, color: "#92400e", letterSpacing: ".04em" }}>RATE METHODOLOGY</span>
                 </div>
                 <div style={{ fontSize: 11, color: C.txM, lineHeight: 1.6 }}>
-                  Rates are <strong style={{ color: C.tx }}>T12 achieved $/SF/mo</strong> for 10x10 CC — not promo street rates. Based on Extra Space, Public Storage T12 in-place rents (15-27% above street).
-                  <br/><strong style={{ color: C.yel }}>$2.00/SF/mo CC</strong> = feasibility floor. Scores capped if below.
-                  <br/><span style={{ color: C.txD }}>National avg T12: ~$1.70/SF/mo.</span>
+                  CC rates are <strong style={{ color: C.tx }}>in-store $/SF/mo</strong> for 10x10 CC units — scraped from REIT facility pages (Public Storage, Extra Space, CubeSmart) in the trade area. In-store rates, not discounted web/promo rates.
+                  <br/>Weighting: <strong style={{ color: C.tx }}>65% 10x10 CC</strong>, 35% other CC benchmark sizes.
+                  <br/>Fallback: REIT benchmark + Google Places competitor estimation when scraping unavailable.
+                  <br/><strong style={{ color: C.yel }}>$2.00/SF/mo CC</strong> = feasibility floor. Scores capped at 5 if below.
+                  <br/><span style={{ color: C.txD }}>National avg in-store CC: ~$1.70/SF/mo.</span>
                 </div>
               </GlassCard>
             </div>
@@ -1225,13 +1262,13 @@ export default function App() {
               <div style={{ fontSize: 13, color: C.txM, marginTop: 4 }}>All storage rates are <strong style={{ color: C.tx }}>per SF per month</strong>.</div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(420px, 1fr))", gap: 14 }}>
-              <CriteriaGroup title="SELF-STORAGE RATES" icon="$" accent={C.blue} keys={["cc_rate_min", "cc_rate_max", "noncc_rate_min", "noncc_rate_max"]}
-                note="$/SF/month — T12 achieved/in-place rates (not promo). CC min reflects construction cost feasibility." />
+              <CriteriaGroup title="SELF-STORAGE RATES" icon="$" accent={C.blue} keys={["cc_rate_min", "cc_rate_max"]}
+                note="$/SF/month — in-store CC rates scraped from REIT facilities. CC min reflects construction cost feasibility." criteria={criteria} onUpdate={upd} />
               <CriteriaGroup title="MARKET & COMPETITION" icon="M" accent={C.grn} keys={["occupancy_min", "sf_per_capita_max"]}
-                note="SF/capita < 8 generally indicates undersupply." />
+                note="SF/capita < 8 generally indicates undersupply." criteria={criteria} onUpdate={upd} />
               <CriteriaGroup title="DEMOGRAPHICS" icon="D" accent={C.pur} keys={["pop_3mi_min", "hhi_min"]}
-                note="Trade area population and income." />
-              <CriteriaGroup title="SITE REQUIREMENTS" icon="S" accent={C.org} keys={["min_acreage_ss", "max_price_per_acre"]} />
+                note="Trade area population and income." criteria={criteria} onUpdate={upd} />
+              <CriteriaGroup title="SITE REQUIREMENTS" icon="S" accent={C.org} keys={["min_acreage_ss", "max_price_per_acre"]} criteria={criteria} onUpdate={upd} />
             </div>
             <StepNav
               left={<><Btn onClick={() => setTab("input")}>← Input</Btn><span style={{ fontSize: 11, color: C.txD }}>{actCrit} criteria active</span><Btn onClick={() => setCriteria(DEFAULT_CRITERIA)}>Reset Defaults</Btn></>}
@@ -1253,6 +1290,18 @@ export default function App() {
               </EmptyState>
             ) : (<>
               <StatRow items={[["Sites", results.length, C.blue], ["Avg Score", avg, sCol(parseFloat(avg) || 0)], ["Top Tier (7+)", top, C.grn], ["Markets", mkts.length, C.pur], ...(feasSelected.size > 0 ? [["Selected", feasSelected.size, C.cyn]] : [])]} />
+
+              {/* Live data sources indicator */}
+              {liveSources && (
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10, padding: "6px 12px", background: `${C.cyn}06`, borderRadius: 8, border: `1px solid ${C.cyn}15` }}>
+                  <span style={{ fontSize: 9, fontWeight: 700, color: C.cyn, letterSpacing: ".06em" }}>LIVE DATA</span>
+                  {Object.entries(liveSources).map(([k, v]) => (
+                    <Tag key={k} bg={v ? `${C.grn}0a` : `${C.red}06`} c={v ? C.grn : C.txD}>
+                      {v ? "\u2713" : "\u2717"} {k.replace(/_/g, " ")}
+                    </Tag>
+                  ))}
+                </div>
+              )}
 
               {/* Filters + actions */}
               <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap", padding: "0 2px" }}>
@@ -1282,12 +1331,6 @@ export default function App() {
                   <Btn onClick={exportCSV} style={{ padding: "4px 10px" }}>Export CSV</Btn>
                   <Btn onClick={rescreenCurrent} style={{ padding: "4px 10px" }}>Re-screen</Btn>
                   <Btn onClick={() => setTab("input")} style={{ padding: "4px 10px" }}>+ Screen More</Btn>
-                  {enrichProg.active && (
-                    <span style={{ fontSize: 11, color: C.pur, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
-                      <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.pur, animation: "pulse 1.5s infinite" }} />
-                      Verifying brokers... {enrichProg.d}/{enrichProg.t}
-                    </span>
-                  )}
                 </div>
               </div>
 
@@ -1403,7 +1446,7 @@ export default function App() {
                                     {/* Actions row */}
                                     <div style={{ marginTop: 10, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                                       {hasFeasData && (
-                                        <button onClick={(e) => { e.stopPropagation(); setTab("feasibility"); }}
+                                        <button onClick={(e) => { e.stopPropagation(); setFeasExpAddr(r.address); setTab("feasibility"); }}
                                           style={{ padding: "5px 12px", borderRadius: 5, border: `1px solid ${C.cyn}40`, background: `${C.cyn}10`, color: C.cyn, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>
                                           View Feasibility →
                                         </button>
@@ -1412,7 +1455,7 @@ export default function App() {
                                         style={{ padding: "5px 12px", borderRadius: 5, border: `1px solid ${C.pur}40`, background: `${C.pur}10`, color: C.pur, fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>
                                         View on Map
                                       </button>
-                                      {((r.listing_broker && r.listing_broker !== "Unknown") || (r.broker_enriched && r.listing_broker_co)) && (
+                                      {((r.listing_broker && r.listing_broker !== "Unknown") || (r.broker_enriched && r.listing_broker_co)) ? (
                                         <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                                           <Tag bg={`${C.pur}0a`} c={C.pur}>
                                             {r.listing_broker && r.listing_broker !== "Unknown" ? r.listing_broker : ""}{r.listing_broker_co && r.listing_broker_co !== "Unknown" ? `${r.listing_broker && r.listing_broker !== "Unknown" ? " · " : ""}${r.listing_broker_co}` : ""}
@@ -1425,8 +1468,10 @@ export default function App() {
                                           )}
                                           {(() => {
                                             const bName = r.listing_broker && r.listing_broker !== "Unknown" ? r.listing_broker : null;
-                                            if (!bName) return null;
-                                            const inCRM = brokerNameSet.has(bName.toLowerCase());
+                                            const bCo = r.listing_broker_co && r.listing_broker_co !== "Unknown" ? r.listing_broker_co : null;
+                                            const crmKey = (bName || bCo || "").toLowerCase();
+                                            if (!crmKey) return null;
+                                            const inCRM = brokerNameSet.has(crmKey);
                                             return inCRM ? (
                                               <Tag bg={`${C.grn}0a`} c={C.grn}>✓ In CRM</Tag>
                                             ) : (
@@ -1439,23 +1484,49 @@ export default function App() {
                                               </button>
                                             );
                                           })()}
+                                          {r.listing_url && (
+                                            <a href={r.listing_url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                                              style={{ padding: "2px 8px", borderRadius: 4, border: `1px solid ${C.blue}40`, background: `${C.blue}10`, color: C.blue, fontSize: 10, fontFamily: "inherit", fontWeight: 600, textDecoration: "none" }}>
+                                              View Listing ↗
+                                            </a>
+                                          )}
                                           <BrokerVerifyLinks address={r.address} broker={r.listing_broker} />
                                           {r.listing_broker_phone && <ExtLink href={`tel:${r.listing_broker_phone}`} c={C.txD}>{r.listing_broker_phone}</ExtLink>}
                                           {r.listing_broker_email && <ExtLink href={`mailto:${r.listing_broker_email}`} c={C.txD}>{r.listing_broker_email}</ExtLink>}
                                         </div>
-                                      )}
-                                      <button onClick={(e) => { e.stopPropagation(); enrichBrokers([r]); }}
-                                        style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, color: C.pur, background: `${C.pur}08`, border: `1px solid ${C.pur}18`, cursor: "pointer", fontFamily: "inherit" }}>
-                                        {r.broker_enriched ? "Re-verify" : "Verify Broker"}
-                                      </button>
+                                      ) : r.listing_url ? (
+                                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                          <a href={r.listing_url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                                            style={{ padding: "2px 8px", borderRadius: 4, border: `1px solid ${C.blue}40`, background: `${C.blue}10`, color: C.blue, fontSize: 10, fontFamily: "inherit", fontWeight: 600, textDecoration: "none" }}>
+                                            View Listing ↗
+                                          </a>
+                                          <span style={{ fontSize: 10, color: C.txM }}>No broker found on listing</span>
+                                        </div>
+                                      ) : null}
+                                      <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                                        <BrokerAssign resultId={r.id} address={r.address} label="Assign Broker" results={results} brokers={brokers} onNavigateBrokers={() => setTab("brokers")} />
+                                      </div>
                                     </div>
                                   </div>
+                                  {/* Live County Data Panel */}
+                                  {(r._county || r._zoning_code || r._owner || r._land_use) && (
+                                    <div style={{ flex: "0 0 220px" }}>
+                                      <div style={{ fontSize: 10, fontWeight: 700, color: C.cyn, marginBottom: 5, letterSpacing: ".04em" }}>COUNTY DATA</div>
+                                      <DataGrid items={[
+                                        r._county && ["County", r._county],
+                                        r._zoning_code && ["Zoning", r._zoning_code, C.cyn],
+                                        r._zoning_source && ["Source", r._zoning_source],
+                                        r._land_use && ["Land Use", r._land_use],
+                                        r._owner && ["Owner", r._owner],
+                                        r._live_sources && ["Data Sources", r._live_sources.join(", ")],
+                                      ].filter(Boolean)} />
+                                    </div>
+                                  )}
                                   <div style={{ flex: "0 0 250px" }}>
                                     <div style={{ fontSize: 10, fontWeight: 700, color: C.txM, marginBottom: 5, letterSpacing: ".04em" }}>MARKET DATA (T12 Achieved)</div>
                                     <DataGrid items={[
                                         ["CC Rate", r.est_cc_rate_psf_mo != null ? `$${r.est_cc_rate_psf_mo.toFixed(2)}/SF/mo` : "—", r.est_cc_rate_psf_mo >= 2.0 ? C.grn : C.red],
-                                        ["Non-CC Rate", r.est_noncc_rate_psf_mo != null ? `$${r.est_noncc_rate_psf_mo.toFixed(2)}/SF/mo` : "—"],
-                                        ["Rate Status", r.est_cc_rate_psf_mo >= 2.0 ? "✓ Above $2 floor" : r.est_cc_rate_psf_mo >= 1.5 ? "⚠ Below $2 (capped 5)" : "⚠ Below $1.50 (capped 4)", r.est_cc_rate_psf_mo >= 2.0 ? C.grn : C.yel],
+                                        ["Rate Status", r.est_cc_rate_psf_mo >= 2.0 ? "✓ Above $2 floor" : "⚠ Below $2 (capped at 5)", r.est_cc_rate_psf_mo >= 2.0 ? C.grn : C.yel],
                                         ["Occupancy", r.est_occupancy != null ? `${r.est_occupancy}%` : "—", r.est_occupancy >= 88 ? C.grn : null],
                                         ["SF/Capita", r.est_sf_per_capita ?? "—"],
                                         ["Trade Area", r.trade_area_miles ? `${r.trade_area_miles} mi` : "3 mi"],
@@ -1682,12 +1753,6 @@ export default function App() {
                                         </span>
                                         <span style={{ fontSize: 9, color: C.txD }}>/SF/mo</span>
                                       </div>
-                                      {r.est_noncc_rate_psf_mo != null && (
-                                        <div style={{ display: "flex", gap: 6, alignItems: "center", padding: "5px 10px", borderRadius: 6, background: `${C.txD}0c`, border: `1px solid ${C.brd}` }}>
-                                          <span style={{ fontSize: 10, color: C.txD }}>Non-CC</span>
-                                          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, fontSize: 12, color: C.tx }}>${r.est_noncc_rate_psf_mo.toFixed(2)}</span>
-                                        </div>
-                                      )}
                                       <div style={{ display: "flex", gap: 6, alignItems: "center", padding: "5px 10px", borderRadius: 6, background: `${C.txD}0c`, border: `1px solid ${C.brd}` }}>
                                         <span style={{ fontSize: 10, color: C.txD }}>Occ</span>
                                         <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, fontSize: 12, color: r.est_occupancy >= 88 ? C.grn : C.txM }}>{r.est_occupancy != null ? `${r.est_occupancy}%` : "—"}</span>
@@ -1728,7 +1793,7 @@ export default function App() {
                                         style={{ padding: "3px 10px", borderRadius: 5, border: `1px solid ${C.pur}30`, background: `${C.pur}0c`, color: C.pur, fontSize: 10, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>
                                         View on Map
                                       </button>
-                                      {((r.listing_broker && r.listing_broker !== "Unknown") || (r.broker_enriched && r.listing_broker_co)) && (
+                                      {((r.listing_broker && r.listing_broker !== "Unknown") || (r.broker_enriched && r.listing_broker_co)) ? (
                                         <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                                           <Tag bg={`${C.pur}0a`} c={C.pur}>
                                             {r.listing_broker && r.listing_broker !== "Unknown" ? r.listing_broker : ""}{r.listing_broker_co && r.listing_broker_co !== "Unknown" ? `${r.listing_broker && r.listing_broker !== "Unknown" ? " · " : ""}${r.listing_broker_co}` : ""}
@@ -1741,8 +1806,10 @@ export default function App() {
                                           )}
                                           {(() => {
                                             const bName = r.listing_broker && r.listing_broker !== "Unknown" ? r.listing_broker : null;
-                                            if (!bName) return null;
-                                            const inCRM = brokerNameSet.has(bName.toLowerCase());
+                                            const bCo = r.listing_broker_co && r.listing_broker_co !== "Unknown" ? r.listing_broker_co : null;
+                                            const crmKey = (bName || bCo || "").toLowerCase();
+                                            if (!crmKey) return null;
+                                            const inCRM = brokerNameSet.has(crmKey);
                                             return inCRM ? (
                                               <Tag bg={`${C.grn}0a`} c={C.grn}>✓ In CRM</Tag>
                                             ) : (
@@ -1755,11 +1822,28 @@ export default function App() {
                                               </button>
                                             );
                                           })()}
+                                          {r.listing_url && (
+                                            <a href={r.listing_url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                                              style={{ padding: "2px 8px", borderRadius: 4, border: `1px solid ${C.blue}40`, background: `${C.blue}10`, color: C.blue, fontSize: 10, fontFamily: "inherit", fontWeight: 600, textDecoration: "none" }}>
+                                              View Listing ↗
+                                            </a>
+                                          )}
                                           <BrokerVerifyLinks address={r.address} broker={r.listing_broker} />
                                           {r.listing_broker_phone && <ExtLink href={`tel:${r.listing_broker_phone}`} c={C.txD}>{r.listing_broker_phone}</ExtLink>}
                                           {r.listing_broker_email && <ExtLink href={`mailto:${r.listing_broker_email}`} c={C.txD}>{r.listing_broker_email}</ExtLink>}
                                         </div>
-                                      )}
+                                      ) : r.listing_url ? (
+                                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                          <a href={r.listing_url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                                            style={{ padding: "2px 8px", borderRadius: 4, border: `1px solid ${C.blue}40`, background: `${C.blue}10`, color: C.blue, fontSize: 10, fontFamily: "inherit", fontWeight: 600, textDecoration: "none" }}>
+                                            View Listing ↗
+                                          </a>
+                                          <span style={{ fontSize: 10, color: C.txM }}>No broker found on listing</span>
+                                        </div>
+                                      ) : null}
+                                      <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                                        <BrokerAssign resultId={r.id} address={r.address} label="Assign Broker" results={results} brokers={brokers} onNavigateBrokers={() => setTab("brokers")} />
+                                      </div>
                                     </div>
                                   </div>
 
@@ -1772,7 +1856,13 @@ export default function App() {
                                       </Tag>
                                     </div>
                                     <DataGrid cols="1fr 1fr" items={[
-                                      ["Parcel", f.parcel_acres ? `${f.parcel_acres} ac (${(f.parcel_sf || 0).toLocaleString()} SF)` : "—"],
+                                      ["Parcel", (() => {
+                                        if (!f.parcel_acres) return "—";
+                                        const base = `${f.parcel_acres} ac (${(f.parcel_sf || 0).toLocaleString()} SF)`;
+                                        if (r.acreage && Math.abs(f.parcel_acres - r.acreage) / r.acreage > 0.2)
+                                          return `${base} ⚠ listing says ${r.acreage} ac`;
+                                        return base;
+                                      })(), (r.acreage && f.parcel_acres && Math.abs(f.parcel_acres - r.acreage) / r.acreage > 0.2) ? C.org : null],
                                       ["FAR", f.far_limit ?? "—"],
                                       ["Lot Coverage", f.lot_coverage_pct ? `${(f.lot_coverage_pct * 100).toFixed(0)}%` : "—"],
                                       ["Setbacks", f.front_setback_ft ? `F:${f.front_setback_ft}' S:${f.side_setback_ft}' R:${f.rear_setback_ft}'` : "—"],
@@ -1789,6 +1879,12 @@ export default function App() {
                                     {f.development_notes && (
                                       <div style={{ fontSize: 10, color: C.txM, marginTop: 6, fontStyle: "italic" }}>{f.development_notes}</div>
                                     )}
+                                    {/* Data source attribution */}
+                                    <div style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>
+                                      {f._county && <Tag bg={`${C.cyn}0a`} c={C.cyn}>{f._county}</Tag>}
+                                      {f._zoning_verified && <Tag bg={`${C.grn}0a`} c={C.grn}>Zoning Verified</Tag>}
+                                      {f._data_source && <Tag bg={`${C.blue}0a`} c={C.blue}>{f._data_source.replace(/_/g, " ")}</Tag>}
+                                    </div>
                                   </div>
                                 </div>
                               </td>
@@ -1906,9 +2002,11 @@ export default function App() {
                               <span style={{ color: C.txM }}>Type</span><span style={{ color: C.tx, fontWeight: 500 }}>{r.inferred_type}</span>
                               {r.est_cc_rate_psf_mo != null && (<><span style={{ color: C.txM }}>CC Rate</span><span style={{ fontWeight: 600, color: r.est_cc_rate_psf_mo >= 2.0 ? "#059669" : "#dc2626" }}>${r.est_cc_rate_psf_mo.toFixed(2)}/SF/mo</span></>)}
                               {r.est_occupancy != null && (<><span style={{ color: C.txM }}>Occupancy</span><span style={{ color: C.tx, fontWeight: 500 }}>{r.est_occupancy}%</span></>)}
-                              {((r.listing_broker && r.listing_broker !== "Unknown") || (r.broker_enriched && r.listing_broker_co && r.listing_broker_co !== "Unknown")) && (
+                              {((r.listing_broker && r.listing_broker !== "Unknown") || (r.broker_enriched && r.listing_broker_co && r.listing_broker_co !== "Unknown")) ? (
                                 <><span style={{ color: C.txM }}>Broker</span><span style={{ color: C.pur, fontWeight: 500 }}>{r.listing_broker && r.listing_broker !== "Unknown" ? r.listing_broker : ""}{r.listing_broker_co && r.listing_broker_co !== "Unknown" ? `${r.listing_broker && r.listing_broker !== "Unknown" ? " · " : ""}${r.listing_broker_co}` : ""}</span></>
-                              )}
+                              ) : r.listing_url ? (
+                                <><span style={{ color: C.txM }}>Listing</span><a href={r.listing_url} target="_blank" rel="noopener noreferrer" style={{ color: C.blue, fontWeight: 500, textDecoration: "none", fontSize: 11 }}>View Listing ↗</a></>
+                              ) : null}
                             </div>
                             {r.key_insight && (
                               <div style={{ fontSize: 10, color: C.txM, marginTop: 6, fontStyle: "italic", lineHeight: 1.4 }}>{r.key_insight}</div>
@@ -1921,7 +2019,7 @@ export default function App() {
                                 Results →
                               </button>
                               {hasFeasData && (
-                                <button onClick={() => setTab("feasibility")}
+                                <button onClick={() => { setFeasExpAddr(r.address); setTab("feasibility"); }}
                                   aria-label={`View ${r.address} feasibility analysis`}
                                   style={{ flex: 1, padding: "6px 10px", borderRadius: 6, border: `1px solid ${G.glassBrd}`, background: G.glass, color: C.cyn, fontSize: 10, cursor: "pointer", fontFamily: "inherit", fontWeight: 600, transition: "all 0.15s" }}>
                                   Feasibility →
@@ -1929,10 +2027,10 @@ export default function App() {
                               )}
                             </div>
                             {/* Favorite — save broker to CRM */}
-                            <MapFavoriteBtn result={r} />
+                            <MapFavoriteBtn result={r} results={results} brokerNameSet={brokerNameSet} addBrokerToCRM={addBrokerToCRM} />
                             {/* Assign existing CRM broker */}
                             <div style={{ marginTop: 4 }}>
-                              <BrokerAssign resultId={r.id} address={r.address} popupMode label="Assign to Broker" />
+                              <BrokerAssign resultId={r.id} address={r.address} popupMode label="Assign to Broker" results={results} brokers={brokers} onNavigateBrokers={() => setTab("brokers")} />
                             </div>
                           </div>
                         </Popup>

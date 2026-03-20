@@ -65,15 +65,16 @@ export function critText(criteria) {
 }
 
 export function buildSysPrompt(criteria) {
-  return `SS screener. Score 1-10. #1 RATES #2 PARCEL #3 ZONING.
-Rates=T12 $/SF/mo 10x10 CC (NOT promo). CC<$1.40→cap 5,<$1.10→cap 4,<$0.85→cap 3. Trade:3mi sub,5mi rural. 8+SF/cap=oversupply.
+  return `SS screener. Sub-scores 1-10, overall computed server-side as: 40% rate_environment + 20% market_score + 20% site_potential + 10% location_score + 10% competition_risk. Hard caps: CC<$2.00→max 5, CC<$1.40→max 5, CC<$1.10→max 4, CC<$0.85→max 3.
+Rates=T12 $/SF/mo 10x10 CC (NOT promo). Trade:3mi sub,5mi rural. 8+SF/cap=oversupply. rate_environment is the MOST important sub-score — base it on actual CC rate vs market benchmarks.
 CONVERSION: If [building SF] provided, evaluate for SS conversion. Industrial w/ 18ft+ clear height & clear span = ideal (+2 site_potential). Office/retail harder (floor loads, ceiling height, column spacing). property_category: "land" if vacant, "conversion" if existing building for SS reuse.
 ${RATE_REF_TEXT}
 ${critText(criteria)}
-JSON array ONLY:[{"address":"…","overall_score":N,"location_score":N,"market_score":N,"site_potential":N,"competition_risk":N,"rate_environment":N,"potential_use":"Self-Storage|Either|Unlikely","inferred_type":"Land|Industrial|Office|Retail/Big Box|Highway Frontage|Commercial|Other","property_category":"land|conversion","building_sf":N or null,"acreage":N or null,"est_cc_rate_psf_mo":N,"est_noncc_rate_psf_mo":N,"est_occupancy":N,"est_sf_per_capita":N,"est_pop_trade_area":N,"est_hhi":N,"trade_area_miles":N,"nearby_comps":"2-3 comps","criteria_pass":N,"criteria_fail":N,"criteria_flags":["…"],"key_insight":"1 sent","market":"metro"}]`;
+JSON array ONLY:[{"address":"…","overall_score":N,"location_score":N,"market_score":N,"site_potential":N,"competition_risk":N,"rate_environment":N,"potential_use":"Self-Storage|Either|Unlikely","inferred_type":"Land|Industrial|Office|Retail/Big Box|Highway Frontage|Commercial|Other","property_category":"land|conversion","building_sf":N or null,"acreage":N or null,"est_cc_rate_psf_mo":N,"est_occupancy":N,"est_sf_per_capita":N,"est_pop_trade_area":N,"est_hhi":N,"trade_area_miles":N,"nearby_comps":"2-3 comps","criteria_pass":N,"criteria_fail":N,"criteria_flags":["…"],"key_insight":"1 sent","market":"metro"}]`;
 }
 
 export const FEAS_SYS_PROMPT = `SS zoning+dev feasibility. RULES: lot_coverage_pct=decimal(0.50 not 65). Typical lot coverage 40-60%, use 50% default. FAR commercial/industrial: 0.5-2.0. Zoning paths: ~20% permitted, ~60% conditional, ~20% variance nationally. Typical setbacks: 20-30ft front, 10-15ft side, 15-20ft rear. Max height 35-55ft typical SS (3-4 stories indoor, 1 story drive-up). meets_90k=achievable_gsf>=90000.
+CRITICAL ZONING RULE: Self-storage is NEVER permitted or conditional in residential zones (R-1, R-2, R-3, RE, RA, RS, RD, RW, etc.). If a site is in a residential zone, set ss_permitted=false, ss_conditional=false, ss_variance=true, zoning_risk="high". Residential listings (homes, apartments, condos) are NOT viable for SS development.
 CONVERSION: If [building SF] provided, this is a conversion site. existing_building_sf=current building. Conversion achievable_gsf=existing_building_sf×efficiency(0.85-0.95 industrial, 0.70-0.80 office/retail). Industrial clear-span 18ft+→mezzanine potential (1.5-2x floor area). conversion_complexity: "low"=industrial clear-span, "medium"=retail/big-box, "high"=office multi-floor. For land sites, use ground-up buildout logic and leave conversion fields null.
 JSON array ONLY:
 [{"address":"…","zoning_code":"XX","zoning_desc":"short","ss_permitted":bool,"ss_conditional":bool,"ss_variance":bool,"zoning_path":"path+timeline","zoning_risk":"high|medium|low","parcel_acres":N,"parcel_sf":N,"far_limit":N,"lot_coverage_pct":0.50,"front_setback_ft":N,"side_setback_ft":N,"rear_setback_ft":N,"max_height_ft":N,"max_stories":N,"buildable_sf":N,"achievable_gsf":N,"stories_proposed":3,"meets_90k":bool,"development_notes":"1 sentence","existing_building_sf":N or null,"conversion_complexity":"low|medium|high" or null,"conversion_notes":"1 sentence or null"}]`;
@@ -218,10 +219,19 @@ export function matchAddress(resultAddr, siteList) {
   ));
 }
 
-export function validateAndCapRates(results) {
+export function validateAndCapRates(results, liveDataMap) {
   return results.map(r => {
     const metro = r.market || "";
-    const ref = getMarketRate(metro);
+    let ref = getMarketRate(metro);
+
+    // If StorTrack live rates are available for this address, use them
+    if (liveDataMap) {
+      const live = liveDataMap.get(r.address);
+      if (live?.rates?.cc_low && live?.rates?.cc_high) {
+        ref = { low: live.rates.cc_low, high: live.rates.cc_high };
+      }
+    }
+
     let cc = r.est_cc_rate_psf_mo;
     let noncc = r.est_noncc_rate_psf_mo;
     let score = r.overall_score;
@@ -251,15 +261,25 @@ export function validateAndCapRates(results) {
       noncc = round05(cc * 0.78);
     }
 
-    if (cc < 0.85 && score > 3) { score = 3; rateEnv = Math.min(rateEnv || 3, 3); flags.push("Score capped at 3: CC T12 rate < $0.85/SF/mo"); }
-    else if (cc < 1.10 && score > 4) { score = 4; rateEnv = Math.min(rateEnv || 4, 4); flags.push("Score capped at 4: CC T12 rate < $1.10/SF/mo"); }
-    else if (cc < 1.40 && score > 5) { score = 5; rateEnv = Math.min(rateEnv || 5, 5); flags.push("Score capped at 5: CC T12 rate < $1.40/SF/mo"); }
-    else if (cc < 2.00 && score > 6) { score = 6; rateEnv = Math.min(rateEnv || 6, 6); flags.push("Score capped at 6: CC T12 rate < $2.00/SF/mo"); }
-    else if (cc < 2.50 && score > 7) { score = 7; rateEnv = Math.min(rateEnv || 7, 7); flags.push("Score capped at 7: CC T12 rate < $2.50/SF/mo"); }
-    else if (cc < 3.00 && score > 8) { score = 8; rateEnv = Math.min(rateEnv || 8, 8); flags.push("Score capped at 8: CC T12 rate < $3.00/SF/mo"); }
+    // Rate-weighted overall: 40% rates, 20% market, 20% site, 10% location, 10% competition
+    const re = rateEnv || 5;
+    const ms = r.market_score || 5;
+    const sp = r.site_potential || 5;
+    const ls = r.location_score || 5;
+    const cr = r.competition_risk || 5;
+    score = Math.round(re * 0.40 + ms * 0.20 + sp * 0.20 + ls * 0.10 + cr * 0.10);
+    score = Math.max(1, Math.min(10, score));
+
+    // Hard caps: <$0.85→3, <$1.10→4, <$1.40→5, <$2.00→5, <$2.50→7, <$3.00→8
+    if (cc < 0.85 && score > 3) { score = 3; rateEnv = Math.min(rateEnv || 3, 3); flags.push("Score capped at 3: CC rate < $0.85/SF/mo"); }
+    else if (cc < 1.10 && score > 4) { score = 4; rateEnv = Math.min(rateEnv || 4, 4); flags.push("Score capped at 4: CC rate < $1.10/SF/mo"); }
+    else if (cc < 1.40 && score > 5) { score = 5; rateEnv = Math.min(rateEnv || 5, 5); flags.push("Score capped at 5: CC rate < $1.40/SF/mo"); }
+    else if (cc < 2.00 && score > 5) { score = 5; rateEnv = Math.min(rateEnv || 5, 5); flags.push("Score capped at 5: CC rate below $2.00/SF/mo feasibility floor"); }
+    else if (cc < 2.50 && score > 7) { score = 7; rateEnv = Math.min(rateEnv || 7, 7); flags.push("Score capped at 7: CC rate < $2.50/SF/mo"); }
+    else if (cc < 3.00 && score > 8) { score = 8; rateEnv = Math.min(rateEnv || 8, 8); flags.push("Score capped at 8: CC rate < $3.00/SF/mo"); }
 
     if (score >= 9) {
-      const subs = [r.location_score || 0, r.market_score || 0, r.site_potential || 0, r.competition_risk || 0, rateEnv || 0];
+      const subs = [ls, ms, sp, cr, rateEnv || 0];
       const avg = subs.reduce((a, b) => a + b, 0) / subs.length;
       const weak = subs.filter(s => s < 7).length;
       if (score === 10 && (avg < 8.5 || weak > 0)) { score = 9; flags.push("Score reduced 10→9: not all sub-scores elite"); }
