@@ -2,6 +2,23 @@
 
 ---
 
+## v1.5.0 — Live Data Priority & Methodology Overhaul (2026-03-20)
+
+### Fixed
+- **Rate priority race condition** — REIT scraped and StorTrack rates were racing in parallel; whichever resolved last won. Now uses strict priority: REIT scraped > StorTrack > T12 history > Google Places estimated > static benchmarks
+- **StorTrack no longer overwrites superior data** — StorTrack rates stored separately during parallel fetch, only applied if no REIT scraped rates exist
+
+### Changed
+- **Prompt rate instructions** — System prompt now explicitly tells Claude: "If LIVE MARKET DATA is provided below a site, use those real numbers. Only fall back to static benchmarks for sites WITHOUT live data." Previously Claude saw both live and static data with no priority guidance
+- **Consolidated MARKET_RATES** — `google-places.js` no longer maintains its own duplicate `METRO_RATES` table; imports from `validate.js` as single source of truth
+- **T12 history fallback** — T12 trailing-twelve-month rates (from stored REIT scrapes) now used as fallback when neither REIT scraping nor StorTrack returns data
+
+### Documentation
+- **`POC_PLAN.md` rewritten** — Was stale ("Pre-implementation, awaiting API keys"). Now serves as the live **Data Methodology & Source Log**: rate priority hierarchy, live vs static data inventory, county coverage, prompt methodology, and implementation file map
+- **`DEPLOY_PLAN.md` updated** — Added v1.4.0+ modular architecture diagram, live data pipeline status table, and rate priority documentation
+
+---
+
 ## v1.4.0 — Server Refactoring & Dark Mode (2026-03-20)
 
 ### Refactored

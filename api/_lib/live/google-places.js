@@ -6,38 +6,9 @@
 // Strategy: Google Places finds real competitors → competitor density + brand mix
 // + REIT benchmarks + demographics = market rate estimate that beats pure guessing
 
-const PLACES_BASE = "https://places.googleapis.com/v1/places:searchText";
+import { MARKET_RATES } from "../validate.js";
 
-// ── REIT Rate Benchmarks (T12 CC achieved $/SF/mo) ──────────────────────────
-// Source: Yardi Matrix 2024-25, ESS/PSA/CUBE earnings. T12 in-place 15-27% above street.
-const METRO_RATES = {
-  "los angeles":    { low: 1.65, high: 3.00, typical: 2.30 },
-  "san francisco":  { low: 1.80, high: 3.20, typical: 2.50 },
-  "san jose":       { low: 1.60, high: 2.80, typical: 2.10 },
-  "san diego":      { low: 1.40, high: 2.50, typical: 1.85 },
-  "new york":       { low: 1.80, high: 3.50, typical: 2.60 },
-  "chicago":        { low: 1.00, high: 1.80, typical: 1.35 },
-  "seattle":        { low: 1.10, high: 1.90, typical: 1.45 },
-  "dallas":         { low: 0.85, high: 1.50, typical: 1.10 },
-  "fort worth":     { low: 0.75, high: 1.25, typical: 0.95 },
-  "houston":        { low: 0.75, high: 1.30, typical: 0.95 },
-  "austin":         { low: 0.85, high: 1.50, typical: 1.10 },
-  "denver":         { low: 0.90, high: 1.55, typical: 1.15 },
-  "phoenix":        { low: 0.80, high: 1.40, typical: 1.05 },
-  "atlanta":        { low: 0.70, high: 1.25, typical: 0.90 },
-  "nashville":      { low: 0.85, high: 1.40, typical: 1.05 },
-  "charlotte":      { low: 0.75, high: 1.25, typical: 0.95 },
-  "orlando":        { low: 0.80, high: 1.35, typical: 1.00 },
-  "tampa":          { low: 0.75, high: 1.30, typical: 0.95 },
-  "miami":          { low: 1.15, high: 2.10, typical: 1.55 },
-  "portland":       { low: 0.85, high: 1.50, typical: 1.10 },
-  "boston":          { low: 1.40, high: 2.40, typical: 1.80 },
-  "washington":     { low: 1.25, high: 2.20, typical: 1.65 },
-  "las vegas":      { low: 0.80, high: 1.40, typical: 1.05 },
-  "salt lake":      { low: 0.80, high: 1.35, typical: 1.00 },
-  "minneapolis":    { low: 0.75, high: 1.30, typical: 0.95 },
-  "_default":       { low: 0.80, high: 1.50, typical: 1.10 },
-};
+const PLACES_BASE = "https://places.googleapis.com/v1/places:searchText";
 
 // Premium brand operators — these charge 15-30% above market
 const PREMIUM_BRANDS = [
@@ -288,16 +259,16 @@ export function estimateMarketRates(competitorData, demographics, metro) {
 }
 
 /**
- * Get REIT baseline rates for a metro area
+ * Get REIT baseline rates for a metro area (from shared MARKET_RATES table)
  */
 function getMetroBaseline(metro) {
-  if (!metro) return METRO_RATES._default;
+  if (!metro) return MARKET_RATES._default;
   const m = metro.toLowerCase();
-  for (const [key, val] of Object.entries(METRO_RATES)) {
+  for (const [key, val] of Object.entries(MARKET_RATES)) {
     if (key === "_default") continue;
     if (m.includes(key) || key.includes(m)) return val;
   }
-  return METRO_RATES._default;
+  return MARKET_RATES._default;
 }
 
 /**
